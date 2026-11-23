@@ -606,6 +606,71 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
     <section class="section">
       <header class="section-head">
+        <span class="section-title">复盘作战室 · 明天怎么打</span>
+        <span class="section-count">只做前排核心</span>
+      </header>
+      <div class="panel panel-pad core-panel">
+        <h4>前排过滤 · 拒绝后排杂毛</h4>
+        <div class="core-row">
+          <span class="core-tag is-core">进榜条件</span>
+          <p>
+            2–5 板；节点分 ≥50 且非风险节点；炸板 ≤2 次、换手 ≤30%、封单 ≥0.7%、非尾盘板；
+            板块三关就绪，或至少 1 关 + 热度 ≥40。只对合格前排估算晋级，不足就空着，不拿后排凑数。
+          </p>
+        </div>
+        <div class="core-row">
+          <span class="core-tag">直接剔除</span>
+          <p>
+            同高度 ≥2 且非最高板的三板组、距顶 ≥2 板的中位三板、梯队跟随 / 后排跟风；
+            炸板多、尾盘封板、薄封单、板块 0 关的也剔除，并在“后排剔除”里写明原因。
+          </p>
+        </div>
+        <div class="core-row">
+          <span class="core-tag">高度风向标</span>
+          <p>
+            最高板只当情绪风向标：炸板多、尾盘板、薄封或板块 0 关时只给参考晋级，不进晋级榜；
+            最高板断板前，低位核心不抢“总龙头”身份。
+          </p>
+        </div>
+        <p class="gene-note">
+          晋级估算 = 平滑基准 × 高度系数 × 前排质量 × 瑕疵折扣，输出 ±9pp 区间。
+          基准取今日实测的首板→二板、连板→连板晋级率，并按先验（首板 26% / 连板 40%，k=14）平滑；
+          小样本时结果主要受先验约束，是排序工具，不是胜率。
+        </p>
+      </div>
+      <div class="panel panel-pad core-panel">
+        <h4>能不能出手 · 弱势切核心抱团 / 分歧切核心</h4>
+        <div class="core-row">
+          <span class="core-tag">出手闸门</span>
+          <p>
+            三关空仓；防守 / 冰点 / 退潮只观察；没有合格前排也观察；
+            有断层、高位风险或三板组时“能出手 · 只做分歧核心”，总仓 ≤2 成、单票 ≤1 成；
+            进攻窗口才允许小仓 ≤3 成。任何模式下都不接后排补涨。
+          </p>
+        </div>
+        <div class="core-row">
+          <span class="core-tag">弱势切核心抱团</span>
+          <p>
+            晋级率跌破 30% 或炸板率升破 40%：删除所有后排与补涨，只抱最高板 / 唯一核心；
+            核心不封板就空仓，不低吸跟风。
+          </p>
+        </div>
+        <div class="core-row">
+          <span class="core-tag">分歧切核心</span>
+          <p>
+            高位炸板或断板时：只做最强核心的回封 / 分时转强，不接中位股和后排；
+            核心不回封，当天不交易。竞价高开 1%–4% + 竞价额 ≥ 今日成交 3% + 同板块核心同步红盘，才进入执行观察。
+          </p>
+        </div>
+        <p class="gene-note">
+          龙头评分 = 42% 节点 + 16% 高度适配 + 10% 市值适配 + 14% 封板质量 + 12% 板块质量 + 6% 弱转强 − 尾盘扣分；
+          从合格前排里选龙头，不是简单拿最高板。
+        </p>
+      </div>
+    </section>
+
+    <section class="section">
+      <header class="section-head">
         <span class="section-title">老龙头画像 · 六维与口径</span>
         <span class="section-count">历史样本 · 不是准确率</span>
       </header>
@@ -691,6 +756,10 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         <div class="formula-row">
           <code>隔夜</code>
           <span>50% 基础分 + 30% 基因分 + 20% 板块热度；严格候选 = 三关 + 情绪修复/主升 + 画像 ≥55 + 隔夜分 ≥65 + 2–5 板 + 昨日无炸板 + 节点 ≥50 且非高风险节点。</span>
+        </div>
+        <div class="formula-row">
+          <code>复盘</code>
+          <span>晋级估算 = 平滑基准 × 高度系数 × 前排质量 × 瑕疵折扣，输出 ±9pp；基准用今日实测晋级率按先验平滑。前排只留 2–5 板、节点 ≥50、炸板 ≤2、换手 ≤30%、封单 ≥0.7%、非尾盘、非三板组 / 中位三板 / 跟随；高度风向标只看不接。</span>
         </div>
         <div class="formula-row">
           <code>节点</code>

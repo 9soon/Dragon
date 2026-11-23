@@ -28,6 +28,15 @@ const distribution = computed(() => review.value.distribution || [])
 const maxDist = computed(() => Math.max(1, ...distribution.value.map((x) => x.todayCount)))
 const blown = computed(() => review.value.blownTop || [])
 const down = computed(() => review.value.downTop || [])
+const plan = computed(() => review.value.plan || null)
+const planAction = computed(() => (plan.value && plan.value.action) || null)
+const promoRank = computed(() => (plan.value && plan.value.promotionRank) || [])
+const heightWatch = computed(() => (plan.value && plan.value.heightWatch) || [])
+const rejected = computed(
+  () => (plan.value && plan.value.rejected) || { total: 0, samples: [] }
+)
+const planReview = computed(() => (plan.value && plan.value.review) || [])
+const showRejected = ref(false)
 const live = computed(() => props.dashboard.dataMode === 'live')
 const snapshotLabel = computed(() => {
   const d = props.dashboard
@@ -88,7 +97,7 @@ function tierTone(v) {
         <span class="chip chip--dim">上一交易日 {{ dashboard.prevTradeDateLabel || '--' }}</span>
       </div>
       <p class="review-desc">
-        先看情绪温度，再看昨日涨停的赚钱效应，最后看连板天梯与资金分布。复盘不是总结涨了多少，而是判断明天该不该出手。
+        先看作战室结论，再看情绪温度、昨日涨停赚钱效应与连板天梯。复盘不是总结涨了多少，而是判断明天该不该出手、只做哪只核心。
       </p>
     </section>
 
@@ -98,6 +107,181 @@ function tierTone(v) {
     </div>
 
     <MarketMood :sentiment="dashboard.sentiment" />
+
+    <section v-if="plan" class="section plan-section">
+      <header class="section-head">
+        <span class="section-title">短线作战室</span>
+        <span class="section-count">{{ live ? '盘中推演' : '收盘推演' }} · 只做前排</span>
+      </header>
+
+      <div class="plan-card" :class="`plan-card--${planAction.tone}`">
+        <div class="plan-top">
+          <span class="plan-stance">{{ planAction.label }}</span>
+          <span class="plan-position">{{ planAction.position }}</span>
+        </div>
+        <p class="plan-summary">{{ planAction.summary }}</p>
+        <ul class="plan-review">
+          <li v-for="line in planReview" :key="line">{{ line }}</li>
+        </ul>
+        <div class="plan-scenarios">
+          <div
+            v-for="sc in planAction.scenarios"
+            :key="sc.key"
+            class="scenario"
+            :class="{ 'is-active': sc.active }"
+          >
+            <div class="scenario-head">
+              {{ sc.title }}<em v-if="sc.active">当前适用</em>
+            </div>
+            <p>{{ sc.text }}</p>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="plan.leader" class="leader-card">
+        <div class="leader-head">
+          <div class="leader-title">
+            <small>最可能接棒前排 · {{ plan.leader.tag }}</small>
+            <div class="leader-name-row">
+              <b>{{ plan.leader.name }}</b>
+              <span>{{ plan.leader.lbc }} 板</span>
+              <span>{{ plan.leader.sector }}</span>
+            </div>
+          </div>
+          <div class="leader-prob">
+            <b>{{ plan.leader.promoProb }}<small>%</small></b>
+            <span>晋级估算</span>
+          </div>
+        </div>
+        <div class="leader-meta">
+          <span>节点 {{ plan.leader.nodeLabel }} {{ plan.leader.nodeScore }}</span>
+          <span>封单 {{ plan.leader.sealRatio }}%</span>
+          <span>换手 {{ plan.leader.turnover }}%</span>
+          <span>{{ plan.leader.floatCapYi }} 亿</span>
+        </div>
+        <p class="leader-thesis">{{ plan.leader.thesis }}</p>
+        <ul class="leader-why">
+          <li v-for="line in plan.leader.why.slice(0, 3)" :key="line">{{ line }}</li>
+        </ul>
+        <p class="leader-note">{{ plan.leader.note }}</p>
+        <div v-if="plan.leader.risks.length" class="leader-risk">
+          <span>风险</span>{{ plan.leader.risks.slice(0, 2).join('；') }}
+        </div>
+      </div>
+
+      <div class="promo-panel">
+        <div class="promo-head">
+          <span>明日连板晋级榜</span>
+          <span>只列前排 · 不含杂毛</span>
+        </div>
+        <div v-if="promoRank.length" class="promo-list">
+          <div
+            v-for="item in promoRank"
+            :key="item.code"
+            class="promo-row"
+            :class="{ 'is-top': item.rank === 1 }"
+          >
+            <div class="promo-rank">{{ item.rank }}</div>
+            <div class="promo-main">
+              <div class="promo-title">
+                <b>{{ item.name }}</b>
+                <span class="promo-board">{{ item.lbc }} 板</span>
+                <span class="promo-sector">{{ item.sector }}</span>
+                <span class="promo-node">{{ item.nodeLabel }} {{ item.nodeScore }}</span>
+              </div>
+              <p class="promo-thesis">{{ item.thesis }}</p>
+              <p class="promo-why">{{ item.why[0] }}</p>
+              <div class="promo-meta">
+                <span>首封 {{ item.firstSealLabel }}</span>
+                <span>封单 {{ item.sealRatio }}%</span>
+                <span>换手 {{ item.turnover }}%</span>
+                <span v-if="item.blowCount">炸 {{ item.blowCount }}</span>
+                <span>{{ item.floatCapYi }} 亿</span>
+              </div>
+              <p v-if="item.risks.length" class="promo-risk">
+                风险：{{ item.risks.slice(0, 2).join('；') }}
+              </p>
+            </div>
+            <div class="promo-prob">
+              <b>{{ item.promoProb }}<small>%</small></b>
+              <span>{{ item.probLow }}–{{ item.probHigh }}%</span>
+            </div>
+          </div>
+        </div>
+        <div v-else class="promo-empty">
+          今日没有通过前排过滤的连板核心，明天以观察为主，不为了交易而交易。
+        </div>
+        <p class="promo-foot">
+          概率为启发式估算：今日实测晋级率平滑 × 高度 × 封板质量 × 瑕疵折扣；不是胜率。
+        </p>
+      </div>
+
+      <div v-if="heightWatch.length" class="height-panel">
+        <div class="promo-head">
+          <span>高度风向标 · 只看不接</span>
+          <span>最高 {{ plan.maxBoard }} 板</span>
+        </div>
+        <div
+          v-for="item in heightWatch"
+          :key="item.code"
+          class="height-row"
+          :class="`is-${item.riskLevel}`"
+        >
+          <div class="height-main">
+            <div class="promo-title">
+              <b>{{ item.name }}</b>
+              <span class="promo-board">{{ item.lbc }} 板</span>
+              <span class="promo-sector">{{ item.sector }}</span>
+            </div>
+            <p>{{ item.riskShort }} · {{ item.nodeLabel }} {{ item.nodeScore }}</p>
+          </div>
+          <div class="height-ref">
+            参考晋级
+            <b>{{ item.promoProb }}%</b>
+          </div>
+        </div>
+        <p class="promo-foot">
+          最高板只作为情绪风向标；炸板多 / 尾盘板 / 板块 0 关不进入晋级榜。
+        </p>
+      </div>
+
+      <div class="reject-panel">
+        <button class="reject-toggle" @click="showRejected = !showRejected">
+          <span>后排剔除 {{ rejected.total }} 家</span>
+          <span>{{ showRejected ? '收起 ▴' : '看理由 ▾' }}</span>
+        </button>
+        <div v-if="showRejected" class="reject-list">
+          <div v-for="item in rejected.samples" :key="item.code" class="reject-row">
+            <span class="reject-cat">{{ item.category }}</span>
+            <div class="reject-main">
+              <div class="promo-title">
+                <b>{{ item.name }}</b>
+                <span class="promo-board">{{ item.lbc }} 板</span>
+                <span class="promo-sector">{{ item.sector || '无板块' }}</span>
+              </div>
+              <p>{{ item.reasons.join('；') }}</p>
+            </div>
+          </div>
+          <p v-if="rejected.total > rejected.samples.length" class="reject-more">
+            其余 {{ rejected.total - rejected.samples.length }} 家同属后排 / 脏板 / 尾盘板，不逐一列出。
+          </p>
+        </div>
+      </div>
+
+      <div class="plan-triggers">
+        <h4>明天怎么执行</h4>
+        <ol>
+          <li v-for="t in planAction.triggers" :key="t">{{ t }}</li>
+        </ol>
+        <div class="plan-donot">
+          <span>不做</span>
+          <ul>
+            <li v-for="d in planAction.doNot" :key="d">{{ d }}</li>
+          </ul>
+        </div>
+      </div>
+      <p class="section-note">{{ plan.notes[0] }}</p>
+    </section>
 
     <section class="section">
       <header class="section-head">
@@ -338,5 +522,691 @@ function tierTone(v) {
   font-size: 12px;
   line-height: 1.75;
   color: var(--muted);
+}
+
+/* ---------------- 短线作战室 ---------------- */
+
+.plan-section {
+  gap: 12px;
+}
+
+.plan-card {
+  position: relative;
+  padding: 15px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: linear-gradient(155deg, rgba(24, 30, 44, 0.92), rgba(9, 13, 20, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 12px 30px rgba(0, 0, 0, 0.24);
+  overflow: hidden;
+}
+
+.plan-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(243, 199, 119, 0.28), transparent 75%);
+  pointer-events: none;
+}
+
+.plan-card--warn {
+  border-color: rgba(243, 199, 119, 0.26);
+}
+
+.plan-card--risk {
+  border-color: rgba(255, 84, 96, 0.3);
+}
+
+.plan-card--ok {
+  border-color: rgba(43, 211, 154, 0.26);
+}
+
+.plan-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plan-stance {
+  font-size: 17.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.plan-card--warn .plan-stance {
+  color: var(--gold);
+}
+
+.plan-card--risk .plan-stance {
+  color: var(--up);
+}
+
+.plan-card--ok .plan-stance {
+  color: var(--down);
+}
+
+.plan-position {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 7px;
+  background: rgba(255, 255, 255, 0.03);
+  white-space: nowrap;
+}
+
+.plan-summary {
+  margin: 9px 0 0;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--text-soft);
+}
+
+.plan-review {
+  list-style: none;
+  margin: 11px 0 0;
+  padding: 9px 0 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-review li {
+  position: relative;
+  padding-left: 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.plan-review li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.66em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--gold);
+  opacity: 0.65;
+}
+
+.plan-scenarios {
+  margin-top: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.scenario {
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.scenario.is-active {
+  border-color: rgba(243, 199, 119, 0.28);
+  border-left-color: var(--gold);
+  background: var(--gold-soft);
+}
+
+.scenario-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-soft);
+}
+
+.scenario-head em {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--gold);
+  border: 1px solid var(--gold-line);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.scenario p {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.leader-card {
+  padding: 15px;
+  border-radius: var(--radius);
+  border: 1px solid var(--gold-line);
+  background: linear-gradient(160deg, rgba(243, 199, 119, 0.1), rgba(13, 18, 28, 0.95) 55%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 12px 30px rgba(0, 0, 0, 0.24);
+}
+
+.leader-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.leader-title {
+  min-width: 0;
+}
+
+.leader-title small {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+}
+
+.leader-name-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 3px;
+}
+
+.leader-name-row b {
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+
+.leader-name-row span {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.leader-name-row span:nth-child(2) {
+  color: var(--gold);
+  border: 1px solid var(--gold-line);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.leader-prob {
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.leader-prob b {
+  font-family: var(--mono);
+  font-size: 25px;
+  color: var(--gold);
+  line-height: 1;
+}
+
+.leader-prob b small {
+  font-size: 11px;
+  margin-left: 1px;
+}
+
+.leader-prob span {
+  display: block;
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.leader-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.leader-meta span {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-soft);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.leader-thesis {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gold);
+}
+
+.leader-why {
+  list-style: none;
+  margin: 7px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.leader-why li {
+  position: relative;
+  padding-left: 11px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.leader-why li::before {
+  content: "›";
+  position: absolute;
+  left: 0;
+  color: var(--gold);
+}
+
+.leader-note {
+  margin: 8px 0 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(243, 199, 119, 0.07);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-soft);
+}
+
+.leader-risk {
+  margin-top: 8px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: #ffb0b5;
+}
+
+.leader-risk span {
+  margin-right: 6px;
+  color: var(--up);
+}
+
+.promo-panel,
+.height-panel,
+.reject-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(158deg, rgba(18, 24, 36, 0.9), rgba(9, 12, 19, 0.96));
+  overflow: hidden;
+}
+
+.promo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.promo-head span:first-child {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--text-soft);
+}
+
+.promo-head span:last-child {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.promo-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 58px;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.promo-row:last-child {
+  border-bottom: 0;
+}
+
+.promo-row.is-top {
+  background: linear-gradient(90deg, rgba(243, 199, 119, 0.08), transparent 70%);
+}
+
+.promo-rank {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.promo-row.is-top .promo-rank {
+  color: #151007;
+  background: var(--gold);
+  border-color: var(--gold);
+  font-weight: 700;
+}
+
+.promo-main {
+  min-width: 0;
+}
+
+.promo-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.promo-title b {
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.promo-board {
+  font-size: 10.5px;
+  line-height: 1.2;
+  color: var(--gold);
+  border: 1px solid var(--gold-line);
+  background: var(--gold-soft);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.promo-sector {
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.promo-node {
+  font-size: 10.5px;
+  line-height: 1.2;
+  color: var(--blue);
+  border: 1px solid rgba(102, 169, 255, 0.25);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.promo-thesis {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--gold);
+}
+
+.promo-why {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.promo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.promo-risk {
+  margin: 5px 0 0;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: #ffb0b5;
+}
+
+.promo-prob {
+  align-self: start;
+  padding-top: 1px;
+  text-align: right;
+}
+
+.promo-prob b {
+  font-family: var(--mono);
+  font-size: 19px;
+  line-height: 1.1;
+  color: var(--gold);
+}
+
+.promo-prob b small {
+  font-size: 9.5px;
+}
+
+.promo-prob span {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.promo-foot {
+  margin: 0;
+  padding: 9px 14px 12px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+  font-size: 10.5px;
+  line-height: 1.65;
+  color: var(--dim);
+}
+
+.promo-empty {
+  padding: 16px 14px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.height-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-left: 2px solid transparent;
+}
+
+.height-row:last-of-type {
+  border-bottom: 0;
+}
+
+.height-row.is-high {
+  border-left-color: var(--up);
+  background: rgba(255, 84, 96, 0.045);
+}
+
+.height-row.is-mid {
+  border-left-color: var(--warn);
+}
+
+.height-main {
+  min-width: 0;
+}
+
+.height-main p {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.height-ref {
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 9.5px;
+  line-height: 1.4;
+  color: var(--dim);
+}
+
+.height-ref b {
+  display: block;
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--warn);
+}
+
+.reject-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.reject-toggle span:first-child {
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.reject-list {
+  border-top: 1px solid var(--line);
+}
+
+.reject-row {
+  display: flex;
+  gap: 9px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.reject-row:last-child {
+  border-bottom: 0;
+}
+
+.reject-cat {
+  flex-shrink: 0;
+  align-self: flex-start;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--warn);
+  border: 1px solid rgba(255, 180, 94, 0.26);
+  background: rgba(255, 180, 94, 0.07);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+.reject-main {
+  min-width: 0;
+}
+
+.reject-main p {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.reject-more {
+  margin: 0;
+  padding: 9px 14px 11px;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.plan-triggers {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.plan-triggers h4 {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-soft);
+}
+
+.plan-triggers ol {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-triggers li {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.plan-donot {
+  display: flex;
+  gap: 9px;
+  margin-top: 11px;
+  padding-top: 9px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.plan-donot > span {
+  flex-shrink: 0;
+  height: 18px;
+  padding: 1px 5px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--up);
+  border: 1px solid rgba(255, 84, 96, 0.25);
+  border-radius: 4px;
+}
+
+.plan-donot ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.plan-donot li {
+  position: relative;
+  padding-left: 9px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.plan-donot li::before {
+  content: "·";
+  position: absolute;
+  left: 0;
+  color: var(--up);
+}
+
+@media (max-width: 370px) {
+  .promo-row {
+    grid-template-columns: 20px minmax(0, 1fr) 52px;
+    gap: 6px;
+    padding: 11px 12px;
+  }
+
+  .promo-prob b {
+    font-size: 17px;
+  }
+
+  .plan-stance {
+    font-size: 16.5px;
+  }
 }
 </style>

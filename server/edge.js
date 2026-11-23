@@ -713,7 +713,7 @@ function nodeModelOf(stock, sector, sentiment) {
     score = Math.max(score, weakKind === 'lame' ? 72 : 82)
     label = '转势板'
     role = 'reversal'
-    why.push(`${weakLabel}，具备情绪修复的转势属性`)
+    why.unshift(`${weakLabel}，具备情绪修复的转势属性`)
   }
 
   if (role === 'space' && (phaseKey === 'repair' || phaseKey === 'feast')) {
@@ -827,6 +827,668 @@ function buildNodeBoard(sentiment) {
     blowRate,
     sentimentFit,
     hint
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 复盘作战室：今日短线拆解、前排过滤、明日晋级估算、能不能出手
+ * 晋级概率是启发式估算：用今日实测晋级率做平滑先验，再按节点、封板、
+ * 板块、高度、拥挤度修正；不是回测胜率，也不保证次日涨停。
+ * ------------------------------------------------------------------ */
+
+const PROMO_PRIORS = {
+  first: { rate: 26, k: 14 },
+  continuation: { rate: 40, k: 14 }
+}
+
+function smoothPromotionRate(block, priorPct, k) {
+  const total = num(block && block.total, 0)
+  const promoted = num(block && block.promoted, 0)
+  const prior = priorPct / 100
+  return round(((promoted + prior * k) / (total + k)) * 100, 1)
+}
+
+function sealProfileOf(stock) {
+  const s = stock || {}
+  const floatCap = num(s.floatCap, 0)
+  const sealRatio =
+    s.sealRatio != null
+      ? num(s.sealRatio, 0)
+      : floatCap > 0
+        ? (num(s.sealFund, 0) / floatCap) * 100
+        : 0
+  const minutes = sealMinutesFromOpen(s.firstSeal)
+  let timeScore
+  if (minutes <= 15) timeScore = 100
+  else if (minutes <= 60) timeScore = 86
+  else if (minutes <= 120) timeScore = 68
+  else if (minutes <= 180) timeScore = 52
+  else timeScore = 34
+  const ratioScore = clamp((sealRatio / 2) * 100, 0, 100)
+  const blowPenalty = Math.min(35, num(s.blowCount, 0) * 6)
+  return {
+    score: Math.round(clamp(timeScore * 0.62 + ratioScore * 0.38 - blowPenalty, 0, 100)),
+    sealRatio: round(sealRatio, 2),
+    minutes,
+    timeScore,
+    ratioScore,
+    late: minutes > 120,
+    veryLate: minutes > 180,
+    thin: sealRatio > 0 && sealRatio < 0.8
+  }
+}
+
+function turnoverQualityOf(turnover) {
+  const t = num(turnover, 0)
+  if (t <= 0) return 50
+  if (t < 3) return 70
+  if (t <= 20) return 100
+  if (t <= 30) return 68
+  if (t <= 50) return 35
+  return 15
+}
+
+function sectorQualityOf(sector) {
+  if (!sector) return 0
+  const heat = clamp(num(sector.heat, 0), 0, 100)
+  const gates = clamp(num(sector.gatesPassed, 0), 0, 3)
+  return round(
+    clamp(
+      0.55 * heat + 0.25 * (gates / 3) * 100 + 0.2 * (sector.dataReady ? 100 : 0),
+      0,
+      100
+    ),
+    1
+  )
+}
+
+function heightPromoMult(lbc) {
+  const h = num(lbc, 0)
+  if (h <= 1) return 1
+  if (h === 2) return 1.02
+  if (h === 3) return 1
+  if (h === 4) return 0.92
+  return 0.8
+}
+
+function nodeThesisOf(node, maxBoard) {
+  const n = node || {}
+  if (n.role === 'breaker' || n.role === 'space') {
+    return `处在 ${maxBoard} 板空间高度，负责打开情绪上限`
+  }
+  if (n.role === 'pivot') return `卡位空间板下一板，龙头分歧时的第一替补`
+  if (n.role === 'reversal') return '弱转强转势，修复期的情绪先锋'
+  if (n.role === 'ladder') return '低位强封核心，走补涨 / 接力'
+  return '梯队跟随，不具前排地位'
+}
+
+function planItemOf(x, rank) {
+  const stock = x.stock
+  return {
+    rank,
+    code: stock.code,
+    name: stock.name,
+    sector: x.sector ? x.sector.name : stock.sector || null,
+    lbc: x.lbc,
+    nodeScore: x.node.score,
+    nodeLabel: x.node.label,
+    nodeRole: x.node.role,
+    nodeTone: x.node.tone,
+    nodeWhy: (x.node.why || []).slice(0, 2),
+    nodeRisks: (x.node.risks || []).slice(0, 2),
+    promoProb: x.promoProb,
+    probLow: Math.max(2, Math.round(x.promoProb - 9)),
+    probHigh: Math.min(70, Math.round(x.promoProb + 9)),
+    promoQuality: x.promoQuality,
+    baseRate: x.baseRate,
+    qualityMult: x.qualityMult,
+    heightMult: x.heightMult,
+    penaltyMult: x.penaltyMult,
+    firstSealLabel: sealTimeLabel(stock.firstSeal),
+    sealRatio: round(x.seal.sealRatio, 2),
+    turnover: round(stock.turnover, 1),
+    blowCount: num(stock.blowCount, 0),
+    floatCapYi: round(num(stock.floatCap, 0) / 1e8, 1),
+    sectorHeat: x.sector ? num(x.sector.heat, 0) : null,
+    sectorReady: !!(x.sector && x.sector.dataReady),
+    sectorGates: x.sector ? num(x.sector.gatesPassed, 0) : 0,
+    sameHeight: x.sameHeight,
+    threeCrowd: x.threeCrowd,
+    midTrap: x.midTrap,
+    weakLabel: (stock.weak && stock.weak.label) || '',
+    thesis: x.thesis,
+    why: x.why.slice(0, 4),
+    risks: x.risks.slice(0, 4),
+    riskLevel: x.riskLevel,
+    riskShort: x.riskShort,
+    leaderScore: x.leaderScore == null ? null : x.leaderScore
+  }
+}
+
+function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
+  const s = sentiment || {}
+  const list = Array.isArray(pool) ? pool : []
+  const sectorList = Array.isArray(sectors) ? sectors : []
+  const quoteMap = quotesByCode || new Map()
+  const sectorByCode = new Map()
+  const stockMeta = new Map()
+  for (const sector of sectorList) {
+    for (const st of sector.stocks || []) {
+      if (!st || !st.code) continue
+      if (!sectorByCode.has(st.code)) sectorByCode.set(st.code, sector)
+      if (!stockMeta.has(st.code)) stockMeta.set(st.code, st)
+    }
+  }
+
+  const sameHeightMap = new Map()
+  for (const raw of list) {
+    const h = num(raw.lbc, 0)
+    if (h > 0) sameHeightMap.set(h, (sameHeightMap.get(h) || 0) + 1)
+  }
+  const maxBoard = Math.max(1, num(s.maxBoard, 0))
+  const spaceCount = sameHeightMap.get(maxBoard) || 0
+  const firstCount = sameHeightMap.get(1) || 0
+  const twoBoardCount = sameHeightMap.get(2) || 0
+  const threeBoardCount = sameHeightMap.get(3) || 0
+  const topGap =
+    maxBoard >= 4 && !(sameHeightMap.get(maxBoard - 1) > 0) ? maxBoard - 1 : null
+
+  const firstBase = smoothPromotionRate(
+    s.promotion && s.promotion.first,
+    PROMO_PRIORS.first.rate,
+    PROMO_PRIORS.first.k
+  )
+  const contBase = smoothPromotionRate(
+    s.promotion && s.promotion.continuation,
+    PROMO_PRIORS.continuation.rate,
+    PROMO_PRIORS.continuation.k
+  )
+  const contTotal = num(s.promotion && s.promotion.continuation && s.promotion.continuation.total, 0)
+  const contPromoted = num(s.promotion && s.promotion.continuation && s.promotion.continuation.promoted, 0)
+
+  const items = []
+  for (const raw of list) {
+    if (!raw || !/^\d{6}$/.test(String(raw.code || ''))) continue
+    if (/ST|退/i.test(raw.name || '')) continue
+    const meta = stockMeta.get(raw.code) || null
+    const sector = sectorByCode.get(raw.code) || null
+    const q = quoteMap.get(raw.code) || null
+    const stock = {
+      ...raw,
+      turnover:
+        q && q.turnover != null && q.turnover > 0 ? q.turnover : num(raw.turnover, 0),
+      sealRatio:
+        meta && meta.sealRatio != null
+          ? num(meta.sealRatio, 0)
+          : num(raw.floatCap, 0) > 0
+            ? (num(raw.sealFund, 0) / num(raw.floatCap, 0)) * 100
+            : 0,
+      weak: (meta && meta.weak) || raw.weak || null
+    }
+    const lbc = num(stock.lbc, 0)
+    const sameHeight = sameHeightMap.get(lbc) || 0
+    const node = nodeModelOf(stock, sector, s)
+    const seal = sealProfileOf(stock)
+    const sectorQ = sectorQualityOf(sector)
+    const turnQ = turnoverQualityOf(stock.turnover)
+    const weakScore = num(stock.weak && stock.weak.score, 55)
+    const quality = round(
+      clamp(
+        0.3 * node.score +
+          0.15 * node.heightFit +
+          0.13 * seal.score +
+          0.1 * node.capFit +
+          0.12 * sectorQ +
+          0.1 * turnQ +
+          0.05 * weakScore +
+          0.05 * node.sentimentFit,
+        0,
+        100
+      ),
+      1
+    )
+    const threeCrowd = lbc === 3 && sameHeight >= 2 && lbc < maxBoard
+    const midTrap = lbc >= 3 && lbc < maxBoard && maxBoard - lbc >= 2
+    const packMult = sameHeight >= 10 ? 0.78 : sameHeight >= 6 ? 0.85 : sameHeight >= 3 ? 0.92 : 1
+    let penalty = 1
+    if (node.tone === 'risk') penalty *= 0.78
+    if (num(stock.blowCount, 0) >= 3) penalty *= 0.9
+    if (num(stock.turnover, 0) > 50) penalty *= 0.75
+    else if (num(stock.turnover, 0) > 30) penalty *= 0.85
+    if (seal.thin) penalty *= 0.92
+    if (seal.late) penalty *= 0.9
+    if (lbc >= 2) penalty *= packMult
+    if (threeCrowd) penalty *= 0.78
+    if (midTrap) penalty *= 0.85
+    if (node.role === 'follower') penalty *= 0.85
+    if (!sector) penalty *= 0.82
+    else {
+      if (!sector.dataReady) penalty *= 0.92
+      if (num(sector.gatesPassed, 0) < 1) penalty *= 0.9
+      if (num(sector.heat, 0) < 30) penalty *= 0.9
+    }
+    if (lbc === maxBoard && sameHeight === 1 && maxBoard >= 3) penalty *= 1.05
+    if (topGap) penalty *= 0.94
+    if (lbc >= 2 && num(stock.turnover, 0) < 1.5) penalty *= 0.95
+
+    const baseRate = lbc <= 1 ? firstBase : contBase
+    const hMult = heightPromoMult(lbc)
+    const qualityMult = 0.42 + 0.78 * (quality / 100)
+    const promoProb = round(clamp(baseRate * hMult * qualityMult * penalty, 3, 62), 1)
+    const promoQuality = round(quality * penalty, 1)
+
+    const sectorLine = sector
+      ? `板块「${sector.name}」热度 ${num(sector.heat, 0)} · ${
+          sector.dataReady ? '三关全过' : `过 ${num(sector.gatesPassed, 0)}/3 关`
+        }`
+      : '无板块归属，孤立涨停'
+    const why = [
+      `节点 ${node.label} ${node.score}：${node.why[0] || '结构中性'}`,
+      `${lbc} 板 · 首封 ${sealTimeLabel(stock.firstSeal)} · 封单 ${round(seal.sealRatio, 2)}% · 换手 ${round(
+        stock.turnover,
+        1
+      )}% · ${round(num(stock.floatCap, 0) / 1e8, 1)} 亿流通`,
+      sectorLine,
+      `晋级估算：基准 ${baseRate}% × 高度 ${hMult} × 质量 ${round(qualityMult, 2)} × 瑕疵 ${round(
+        penalty,
+        2
+      )}`
+    ]
+    if (node.why[1]) why.splice(2, 0, node.why[1])
+    if (stock.weak && stock.weak.label && stock.weak.kind !== 'fresh') {
+      why.push(`弱转强：${stock.weak.label}`)
+    }
+
+    const risks = []
+    if (num(stock.blowCount, 0) > 0) {
+      risks.push(`炸板 ${num(stock.blowCount, 0)} 次，封板稳定性待确认`)
+    }
+    if (seal.late) risks.push(`首封 ${sealTimeLabel(stock.firstSeal)}，尾盘板主动性弱`)
+    if (seal.thin) risks.push(`封单 ${round(seal.sealRatio, 2)}% 偏薄`)
+    if (num(stock.blowCount, 0) === 0 && num(stock.turnover, 0) > 0 && num(stock.turnover, 0) < 3) {
+      risks.push('换手偏低，缺少分歧检验，警惕一致加速后的兑现')
+    }
+    if (sector && !sector.dataReady) {
+      risks.push(`板块「${sector.name}」未过三关，晋级缺少板块共振`)
+    }
+    if (lbc >= 2 && sameHeight >= 3) {
+      risks.push(`${lbc} 板同高度 ${sameHeight} 家，明日卡位竞争激烈`)
+    }
+    if (midTrap) risks.push('中位三板 / 距顶两板以上，非卡位核心，先挨分歧')
+    if (lbc >= 5) risks.push('高位节点，次日分歧波动放大')
+    if (topGap && lbc === maxBoard) risks.push(`${topGap} 板断层，缺少下一板的卡位保护`)
+    const hasSectorGateRisk = risks.some((x) => x.includes('三关'))
+    const hasLowTurnoverRisk = risks.some((x) => x.includes('换手偏低'))
+    for (const risk of node.risks || []) {
+      const duplicate =
+        risks.includes(risk) ||
+        (hasSectorGateRisk && risk.includes('三关')) ||
+        (hasLowTurnoverRisk && risk.includes('换手偏低'))
+      if (!duplicate) risks.push(risk)
+    }
+    const riskShort = [
+      num(stock.blowCount, 0) >= 3 ? `${num(stock.blowCount, 0)} 次炸板` : '',
+      num(stock.turnover, 0) >= 50
+        ? `换手 ${round(stock.turnover, 0)}%`
+        : num(stock.turnover, 0) >= 30
+          ? `换手 ${round(stock.turnover, 1)}%`
+          : '',
+      seal.late ? `首封 ${sealTimeLabel(stock.firstSeal)}` : '',
+      sector && num(sector.gatesPassed, 0) < 1 ? '板块 0 关' : '',
+      seal.thin ? '封单薄' : ''
+    ]
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(' / ')
+    let riskLevel = 'ok'
+    if (node.tone === 'risk' || num(stock.blowCount, 0) >= 4 || num(stock.turnover, 0) >= 50) {
+      riskLevel = 'high'
+    } else if (seal.late || seal.thin || midTrap || (sector && num(sector.gatesPassed, 0) < 1)) {
+      riskLevel = 'mid'
+    }
+
+    items.push({
+      stock,
+      sector,
+      lbc,
+      sameHeight,
+      node,
+      seal,
+      sectorQ,
+      quality,
+      penalty,
+      baseRate,
+      heightMult: hMult,
+      qualityMult: round(qualityMult, 2),
+      penaltyMult: round(penalty, 2),
+      promoProb,
+      promoQuality,
+      threeCrowd,
+      midTrap,
+      riskLevel,
+      riskShort: riskShort || '结构一般',
+      thesis: nodeThesisOf(node, maxBoard),
+      why,
+      risks: Array.from(new Set(risks)).slice(0, 5)
+    })
+  }
+
+  const qualifiedAll = items
+    .filter(
+      (x) =>
+        x.lbc >= 2 &&
+        x.lbc <= 5 &&
+        x.node.score >= 50 &&
+        x.node.tone !== 'risk' &&
+        num(x.stock.blowCount, 0) <= 2 &&
+        num(x.stock.turnover, 0) <= 30 &&
+        x.seal.sealRatio >= 0.7 &&
+        !x.seal.late &&
+        !x.threeCrowd &&
+        !x.midTrap &&
+        x.node.role !== 'follower' &&
+        x.sector &&
+        (x.sector.dataReady ||
+          (num(x.sector.gatesPassed, 0) >= 1 && num(x.sector.heat, 0) >= 40))
+    )
+    .map((x) => {
+      const weakScore = num(x.stock.weak && x.stock.weak.score, 55)
+      const leaderScore = round(
+        clamp(
+          0.42 * x.node.score +
+            0.16 * x.node.heightFit +
+            0.1 * x.node.capFit +
+            0.14 * x.seal.score +
+            0.12 * x.sectorQ +
+            0.06 * weakScore -
+            (x.seal.late ? 4 : 0),
+          0,
+          100
+        ),
+        1
+      )
+      return { ...x, leaderScore }
+    })
+    .sort(
+      (a, b) =>
+        b.promoProb - a.promoProb ||
+        b.node.score - a.node.score ||
+        b.leaderScore - a.leaderScore
+    )
+  qualifiedAll.forEach((x, i) => {
+    x.rank = i + 1
+  })
+  const qualified = qualifiedAll.slice(0, 5)
+
+  const qualifiedSet = new Set(qualifiedAll.map((x) => x.stock.code))
+  const heightWatch = items
+    .filter((x) => x.lbc === maxBoard && !qualifiedSet.has(x.stock.code))
+    .sort(
+      (a, b) =>
+        Number(b.riskLevel === 'high') - Number(a.riskLevel === 'high') ||
+        b.lbc - a.lbc ||
+        b.node.score - a.node.score
+    )
+    .slice(0, 3)
+  const watchSet = new Set(heightWatch.map((x) => x.stock.code))
+
+  function junkReasons(x) {
+    const reasons = []
+    const blow = num(x.stock.blowCount, 0)
+    const turnover = num(x.stock.turnover, 0)
+    if (x.node.tone === 'risk' || blow >= 3) {
+      reasons.push(
+        `炸板 ${blow} 次${turnover >= 25 ? ` / 换手 ${round(turnover, 1)}%` : ''}，封板质量不合格`
+      )
+    }
+    if (x.threeCrowd) reasons.push(`三板组 ${x.sameHeight} 家，非唯一核心`)
+    else if (x.midTrap) reasons.push(`距顶 ${maxBoard - x.lbc} 板，中位股先挨分歧`)
+    if (x.seal.late) reasons.push(`首封 ${sealTimeLabel(x.stock.firstSeal)}，主动性不足`)
+    if (x.seal.thin) reasons.push(`封单 ${round(x.seal.sealRatio, 2)}% 偏薄`)
+    if (x.node.role === 'follower') reasons.push('节点只是梯队跟随，不是前排')
+    if (!x.sector) reasons.push('无板块归属，孤立涨停')
+    else if (num(x.sector.heat, 0) < 35) {
+      reasons.push(`板块「${x.sector.name}」热度 ${num(x.sector.heat, 0)} 偏低`)
+    }
+    if (num(x.stock.floatCap, 0) / 1e8 >= 80) {
+      reasons.push(`流通 ${round(num(x.stock.floatCap, 0) / 1e8, 1)} 亿，容量偏大`)
+    }
+    if (!reasons.length) reasons.push('综合节点 / 封板 / 板块评分不足')
+    return Array.from(new Set(reasons)).slice(0, 3)
+  }
+
+  const rejectedPool = items
+    .filter(
+      (x) => x.lbc >= 2 && !qualifiedSet.has(x.stock.code) && !watchSet.has(x.stock.code)
+    )
+    .sort(
+      (a, b) =>
+        b.lbc - a.lbc ||
+        Number(b.node.tone === 'risk') - Number(a.node.tone === 'risk') ||
+        num(b.stock.blowCount, 0) - num(a.stock.blowCount, 0) ||
+        b.node.score - a.node.score
+    )
+  const rejectedSamples = rejectedPool.slice(0, 4).map((x) => ({
+    code: x.stock.code,
+    name: x.stock.name,
+    sector: x.sector ? x.sector.name : null,
+    lbc: x.lbc,
+    nodeScore: x.node.score,
+    nodeLabel: x.node.label,
+    nodeTone: x.node.tone,
+    category: x.threeCrowd
+      ? '三板组'
+      : x.midTrap
+        ? '中位三板'
+        : x.node.tone === 'risk'
+          ? '脏板'
+          : x.seal.late
+            ? '尾盘板'
+            : x.node.role === 'follower'
+              ? '后排跟随'
+              : '杂毛',
+    reasons: junkReasons(x)
+  }))
+
+  const promotionRate =
+    s.promotion && s.promotion.overall ? num(s.promotion.overall.rate, null) : null
+  const premiumAvg =
+    s.premium && s.premium.avg != null && !s.premium.skip ? num(s.premium.avg, 0) : null
+  const blowRate = num(s.blowRate, 0)
+  const signal = s.signal || {}
+  const phaseLabel = s.phase && s.phase.label ? s.phase.label : '情绪待定'
+  const defense = !!signal.defense || s.phaseKey === 'ice' || s.phaseKey === 'ebb'
+  const highRisk = heightWatch.some((x) => x.riskLevel === 'high')
+  const divergence =
+    blowRate >= 30 ||
+    highRisk ||
+    heightWatch.length > 0 ||
+    items.some((x) => x.threeCrowd) ||
+    !!topGap
+
+  const leadNames = qualified
+    .slice(0, 2)
+    .map((x) => x.stock.name)
+    .join(' / ')
+  let action
+  if (!gate || gate.key === 'empty') {
+    action = {
+      canAct: 'no',
+      label: '不能出手 · 空仓等待',
+      tone: 'risk',
+      position: '0 成',
+      summary: `板块三关没有全过，情绪再好也缺少主线载体。明天只记录最强核心，不开新仓。`
+    }
+  } else if (defense) {
+    action = {
+      canAct: 'no',
+      label: '不能出手 · 只观察核心',
+      tone: 'risk',
+      position: '0 成',
+      summary: `情绪处在「${phaseLabel}」或防守窗口：弱势切核心抱团，只留最高板与唯一核心观察；核心不封板就空仓。`
+    }
+  } else if (!qualified.length) {
+    action = {
+      canAct: 'watch',
+      label: '只观察 · 等新核心',
+      tone: 'dim',
+      position: '0 成观察',
+      summary: `环境不差但前排全部不合格：高位脏板、后排杂毛、三板组都不接。等新的干净核心出现，不为了交易而交易。`
+    }
+  } else if (divergence) {
+    action = {
+      canAct: 'conditional',
+      label: '能出手 · 只做分歧核心',
+      tone: 'warn',
+      position: '≤2 成，单票 ≤1 成',
+      summary:
+        `情绪 ${s.score == null ? '--' : s.score} 分「${phaseLabel}」，晋级 ${
+          promotionRate == null ? '--' : promotionRate + '%'
+        }、炸板率 ${blowRate}%，环境不差；` +
+        `${topGap ? `${topGap} 板断层，` : ''}${
+          heightWatch.length
+            ? `高位 ${heightWatch.map((x) => x.stock.name).join('、')} 不适合接力，`
+            : ''
+        }${items.some((x) => x.threeCrowd) ? '三板组拥挤，' : ''}` +
+        `所以明天只做 ${leadNames} 的分歧回封，不追高、不接后排。`
+    }
+  } else if (signal.attack) {
+    action = {
+      canAct: 'small',
+      label: '可小仓试错核心',
+      tone: 'ok',
+      position: '≤3 成，单票 ≤1 成',
+      summary: `情绪与晋级率同步走强，结构没有明显断层。只做 ${leadNames} 的最强核心，分歧低吸 / 回封确认，不买后排补涨。`
+    }
+  } else {
+    action = {
+      canAct: 'watch',
+      label: '轻仓观察核心',
+      tone: 'dim',
+      position: '0–1 成',
+      summary: `环境属于观察窗口：只跟最强核心，等晋级率回到 35% 以上或核心分歧回封，再考虑出手。`
+    }
+  }
+  action.scenarios = [
+    {
+      key: 'weak',
+      title: '弱势切核心抱团',
+      active: defense,
+      text: `晋级率跌破 30% 或炸板率升破 40% 时：删除所有后排与补涨，只抱最高板 / 唯一核心；核心不封板就空仓，不低吸跟风。`
+    },
+    {
+      key: 'diverge',
+      title: '分歧切核心',
+      active: divergence && !defense,
+      text: `高位出现炸板或断板时：只做最强核心的回封 / 分时转强，不接中位股和后排；核心不回封，当天不交易。`
+    }
+  ]
+  action.triggers = [
+    `竞价：${leadNames || '核心候选'} 高开 1%–4%，竞价额 ≥ 今日成交 3%，同板块至少 1 只核心同步红盘；否则放弃。`,
+    '开盘：只等核心分歧回封 / 分时均线转强；高开秒板不追，后排补涨不做。',
+    '风控：晋级率 < 30% 或炸板率 > 40%，或最高板断板，当天直接空仓。',
+    '新周期：若出现新题材 ≥ 3 家首板且龙头一字，老核心降为观察，等第二日确认。'
+  ]
+  action.doNot = [
+    ...heightWatch.slice(0, 2).map((x) => `不接 ${x.stock.name}：${x.riskShort}`),
+    ...rejectedPool
+      .filter((x) => x.lbc >= 3)
+      .slice(0, 1)
+      .map((x) => `不接 ${x.stock.name}（${x.lbc} 板）：${junkReasons(x)[0]}`),
+    ...(topGap ? [`不把 ${topGap} 板断层期的孤板默认当总龙头`] : []),
+    '不做首板后排 / 补涨杂毛；不在一致高开时追核心'
+  ].slice(0, 5)
+
+  const leaderRanked = qualifiedAll
+    .slice()
+    .sort((a, b) => b.leaderScore - a.leaderScore || b.promoProb - a.promoProb)
+  let leader = null
+  if (leaderRanked.length) {
+    const x = leaderRanked[0]
+    const base = planItemOf(x, x.rank)
+    leader = {
+      ...base,
+      tag: x.lbc >= maxBoard ? '空间核心' : '接棒核心候选',
+      note:
+        x.lbc >= maxBoard
+          ? `当前空间核心，但高位分歧放大；只做回封确认，不接一致加速。`
+          : `当前是 ${x.lbc} 板核心，距最高板 ${maxBoard - x.lbc} 板；只有最高板断板、且自身分歧回封，才谈接棒，不是现在就能追。`,
+      why: [
+        ...base.why,
+        `合格前排中龙头评分 ${x.leaderScore} 第一，晋级估算 ${x.promoProb}%`
+      ].slice(0, 5)
+    }
+  }
+
+  const spaceDetail = heightWatch.length
+    ? heightWatch
+        .map((x) => `${x.stock.name} ${x.lbc} 板：${x.riskShort}`)
+        .join('；')
+    : '结构待确认'
+  const threeBoardItems = items.filter((x) => x.lbc === 3)
+  const threeBoardText = threeBoardItems.length
+    ? threeBoardItems
+        .map((x) => `${x.stock.name}（${x.riskShort}${x.midTrap ? ' / 中位三板' : ''}）`)
+        .join('、')
+    : '3 板断档'
+  const review = [
+    `情绪：涨停 ${num(s.limitUp, 0)} 家，炸板率 ${blowRate}%，昨日涨停溢价 ${
+      premiumAvg == null ? '待更新' : round(premiumAvg, 2) + '%'
+    }，${phaseLabel} / ${signal.label || '观察窗口'}。`,
+    `高度：最高 ${maxBoard} 板 ${spaceCount} 家（${spaceDetail}）；${
+      topGap ? `${topGap} 板断层，` : ''
+    }3 板 ${threeBoardCount} 家，2 板 ${twoBoardCount} 家。`,
+    `中位：${threeBoardText}。2 板同高度竞争激烈，只留封板最干净、板块有共振的核心。`,
+    `前排：2 板+ ${items.filter((x) => x.lbc >= 2).length} 只，合格 ${
+      qualifiedAll.length
+    } 只${
+      qualified.length
+        ? `（${qualified
+            .slice(0, 3)
+            .map((x) => x.stock.name)
+            .join('、')}${qualifiedAll.length > 3 ? ' 等' : ''}）`
+        : ''
+    }；剔除 ${rejectedPool.length + heightWatch.length} 只（高位观察 ${heightWatch.length} · 后排剔除 ${rejectedPool.length}）。`
+  ]
+
+  return {
+    generatedAt: new Date().toISOString(),
+    headline: `${phaseLabel} · ${signal.label || '观察窗口'}：${maxBoard} 板 ${spaceCount} 家，${
+      topGap ? `${topGap} 板断层，` : ''
+    }2 板 ${twoBoardCount} 家；前排合格 ${qualifiedAll.length} 只。`,
+    action,
+    leader,
+    promotionRank: qualified.map((x) => planItemOf(x, x.rank)),
+    heightWatch: heightWatch.map((x) => planItemOf(x, null)),
+    rejected: {
+      total: rejectedPool.length,
+      samples: rejectedSamples
+    },
+    review,
+    heights: Array.from(sameHeightMap.entries())
+      .sort((a, b) => b[0] - a[0])
+      .slice(0, 8)
+      .map(([lbc, count]) => ({ lbc, count })),
+    maxBoard,
+    spaceCount,
+    topGap,
+    firstCount,
+    twoBoardCount,
+    threeBoardCount,
+    threeCrowdCount: items.filter((x) => x.threeCrowd).length,
+    qualifiedCount: qualifiedAll.length,
+    rejectedCount: rejectedPool.length + heightWatch.length,
+    baseRates: { first: firstBase, continuation: contBase },
+    notes: [
+      '晋级概率 = 今日实测晋级率平滑先验 × 高度系数 × 前排质量 × 瑕疵折扣；是排序工具，不是胜率，误差很大。',
+      contTotal < 10
+        ? `今日连板晋级实测样本仅 ${contTotal} 只（${contPromoted}/${contTotal}），平滑后 ${contBase}% 主要受先验约束；小样本不能外推为明日真实胜率。`
+        : `今日连板晋级实测 ${contPromoted}/${contTotal}（${contBase}%），已做先验平滑，仍需明日竞价与板块共振验证。`,
+      `首板 ${firstCount} 家不逐一给概率，只统计首板→二板整体水平（平滑后 ${firstBase}%）。`,
+      '三板组 = 同高度 ≥2 且非最高板，默认剔除；距顶两板以上的中位三板也不进前排。',
+      '弱势切核心抱团、分歧切核心：都只做最强核心，后排杂毛不参与。',
+      '研究用途，不构成投资建议；样本外失效、风格切换都可能导致亏损。'
+    ]
   }
 }
 
@@ -2006,6 +2668,7 @@ module.exports = {
   auctionStage,
   buildAuction,
   buildOvernight,
+  buildReviewPlan,
   getDragonProfile,
   warmDragonProfile,
   peekDragonProfile,

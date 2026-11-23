@@ -45,6 +45,7 @@ const {
 const {
   buildAuction,
   buildOvernight,
+  buildReviewPlan,
   getDragonProfile,
   warmDragonProfile,
   peekDragonProfile
@@ -448,6 +449,15 @@ async function buildDashboard() {
     candidateCount: sectorData.counts.mainCandidates,
     totalSectors: sectorData.counts.sectors
   }
+
+  /* 复盘作战室：今日短线拆解、前排过滤、晋级估算与出手纪律 */
+  review.plan = buildReviewPlan({
+    sentiment,
+    gate,
+    pool,
+    sectors: sectorData.all,
+    quotesByCode: qMap
+  })
 
   if (warnings.length) sentiment.warnings = warnings
   sentiment.incomplete = warnings.some((w) => w.includes('炸板') || w.includes('行情'))
