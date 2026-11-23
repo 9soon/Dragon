@@ -132,6 +132,11 @@ const rankedThemes = computed(() =>
                 class="chip"
                 :class="item.coreLabel === '核心先锋' ? 'chip--red' : 'chip--dim'"
               >{{ item.coreLabel }}</span>
+              <span
+                v-if="item.nodeLabel"
+                class="chip"
+                :class="item.nodeTone === 'hot' ? 'chip--red' : item.nodeTone === 'risk' ? 'chip--warn' : 'chip--dim'"
+              >{{ item.nodeLabel }} {{ item.nodeScore }}</span>
               <span v-if="item.acceptable" class="chip chip--green">严格候选</span>
               <span v-else class="chip chip--dim">观察</span>
             </div>
@@ -141,6 +146,10 @@ const rankedThemes = computed(() =>
               <span class="dim">{{ item.boardRule }}</span>
             </div>
             <p v-if="item.why && item.why.length" class="or-why">{{ item.why[0] }}</p>
+            <p v-if="item.nodeWhy" class="or-node">
+              节点 {{ item.nodeLabel }} {{ item.nodeScore }} · {{ item.nodeWhy }} · 情绪适配
+              {{ item.sentimentFit }} / 高度 {{ item.heightFit }} / 市值 {{ item.capFit }}
+            </p>
             <p v-if="item.coreWhy" class="or-core">{{ item.coreWhy }}</p>
             <p v-if="item.risks && item.risks.length" class="or-risk">风险：{{ item.risks[0] }}</p>
           </div>
@@ -151,8 +160,9 @@ const rankedThemes = computed(() =>
         </p>
 
         <div class="overnight-foot">
-          严格候选 = 三关通过 + 情绪修复/主升 + 画像 ≥55 + 隔夜评分 ≥65 + 2–5 板 + 昨日无炸板。
-          准备池只收 2 板以上：基因 42% / 基础 22% / 热度 14% / 高度 10% / 弱转强 12%，再扣炸板、过热换手、容量中军与薄封；不代表可以买入。
+          严格候选 = 三关通过 + 情绪修复/主升 + 画像 ≥55 + 隔夜评分 ≥65 + 2–5 板 + 昨日无炸板 + 节点 ≥50。
+          准备池只收 2 板以上：基因 30% / 基础 14% / 热度 10% / 弱转强 8% / 情绪 10% / 节点 12% / 连板高度 10% / 流通市值 6%，
+          再扣炸板、过热换手、容量中军与薄封；节点与情绪是排序因子，不是胜率保证。
         </div>
       </div>
     </section>
@@ -475,6 +485,7 @@ const rankedThemes = computed(() =>
 }
 
 .or-why,
+.or-node,
 .or-core,
 .or-risk {
   margin: 5px 0 0;
@@ -484,6 +495,10 @@ const rankedThemes = computed(() =>
 
 .or-why {
   color: var(--muted);
+}
+
+.or-node {
+  color: #b9a06e;
 }
 
 .or-core {

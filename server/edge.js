@@ -568,6 +568,287 @@ function auctionLabel(status, stageKey) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 节点票模型
+ * 借鉴公开短线与量化资料里较稳定的四类结构因子：
+ *   情绪周期（冰点/退潮/混沌/修复/主升）、空间板与卡位、弱转强、流通市值与连板高度。
+ * 这些是排序与过滤因子，不是胜率模型；高位空间板同样可能次日补跌。
+ * ------------------------------------------------------------------ */
+
+const NODE_PHASE = { ice: 20, ebb: 36, mixed: 56, repair: 74, feast: 88 }
+
+function sentimentFitOf(sentiment) {
+  const s = sentiment || {}
+  const key = s.phaseKey || 'mixed'
+  let fit = NODE_PHASE[key] != null ? NODE_PHASE[key] : 55
+  const signal = s.signal || {}
+  if (signal.attack) fit += 5
+  if (signal.defense) fit -= 10
+  const premium = s.premium && s.premium.avg != null ? num(s.premium.avg, 0) : null
+  if (premium != null) fit += premium >= 2 ? 4 : premium >= 0 ? 2 : -6
+  const promote =
+    s.promotion && s.promotion.overall ? num(s.promotion.overall.rate, null) : null
+  if (promote != null) {
+    fit += promote >= 50 ? 4 : promote >= 35 ? 2 : promote < 25 ? -6 : 0
+  }
+  const blowRate = num(s.blowRate, null)
+  if (blowRate != null) fit += blowRate <= 18 ? 3 : blowRate >= 40 ? -6 : 0
+  return Math.round(clamp(fit, 5, 98))
+}
+
+/* 公开研究里短线龙头多集中在中小流通盘；过大弹性弱，过小操控与流动性风险高 */
+function capFitOf(capYi) {
+  if (!(capYi > 0)) return 50
+  if (capYi < 20) return 55
+  if (capYi < 30) return 75
+  if (capYi < 50) return 92
+  if (capYi <= 120) return 100
+  if (capYi <= 200) return 88
+  if (capYi <= 350) return 70
+  if (capYi <= 600) return 52
+  return 38
+}
+
+/* 连板高度要相对“市场空间板”看：离顶 1 板的卡位价值高，离顶 3 板以上只是跟随 */
+function heightFitOf(lbc, maxBoard) {
+  const h = num(lbc, 0)
+  const max = Math.max(1, num(maxBoard, 0))
+  if (h <= 0) return 30
+  if (max <= 2) return h >= 2 ? 64 : 50
+  if (h >= max) return h <= 4 ? 100 : h === 5 ? 86 : 60
+  const gap = max - h
+  if (gap === 1) return h >= 3 ? 94 : 78
+  if (gap === 2) return h >= 2 ? 72 : 56
+  return h >= 2 ? 52 : 40
+}
+
+function nodeModelOf(stock, sector, sentiment) {
+  const s = stock || {}
+  const lbc = num(s.lbc, 0)
+  const maxBoard = Math.max(1, num(sentiment && sentiment.maxBoard, 0))
+  const phaseKey = (sentiment && sentiment.phaseKey) || 'mixed'
+  const signal = (sentiment && sentiment.signal) || {}
+  const premium =
+    sentiment && sentiment.premium && sentiment.premium.avg != null
+      ? num(sentiment.premium.avg, 0)
+      : null
+  const promote =
+    sentiment && sentiment.promotion && sentiment.promotion.overall
+      ? num(sentiment.promotion.overall.rate, null)
+      : null
+  const blowRate = num(sentiment && sentiment.blowRate, null)
+  const capYi = num(s.floatCap, 0) / 1e8
+  const blow = num(s.blowCount, 0)
+  const turnover = num(s.turnover, 0)
+  const sealRatio = num(s.sealRatio, 0)
+  const minutes = sealMinutesFromOpen(s.firstSeal)
+  const weakKind = s.weak && s.weak.kind ? s.weak.kind : ''
+  const weakLabel = s.weak && s.weak.label ? s.weak.label : ''
+  const sectorMax = num(sector && sector.maxBoard, 0)
+  const isLeader = !!(sector && sector.leader && sector.leader.code === s.code)
+  const sectorTop = sectorMax > 0 && lbc >= sectorMax
+  const gap = Math.max(0, maxBoard - lbc)
+
+  const sentimentFit = sentimentFitOf(sentiment)
+  const capFit = capFitOf(capYi)
+  const heightFit = heightFitOf(lbc, maxBoard)
+
+  let score = 44
+  let role = 'follower'
+  let label = '低位跟随'
+  const why = []
+  const risks = []
+
+  if (maxBoard <= 1) {
+    score = lbc >= 1 ? 52 : 40
+    label = lbc >= 1 ? '首板节点' : '无高度'
+    role = 'fresh'
+  } else if (maxBoard === 2) {
+    if (lbc >= 2) {
+      score = 62
+      label = '二板节点'
+      role = 'ladder'
+      why.push('市场高度仅 2 板，二板就是空间节点')
+    } else {
+      score = 46
+      label = '首板跟随'
+      role = 'fresh'
+    }
+  } else if (lbc >= maxBoard) {
+    score = 88
+    label = '空间板'
+    role = 'space'
+    why.push(`市场最高 ${maxBoard} 板，处在空间高度`)
+  } else if (gap === 1 && lbc >= 3) {
+    score = 78
+    label = '卡位节点'
+    role = 'pivot'
+    why.push(`距空间板 ${gap} 板，龙头分歧时的第一卡位`)
+  } else if (gap === 1) {
+    score = 66
+    label = '次高节点'
+    role = 'pivot'
+    why.push(`距空间板 ${gap} 板，二板梯队冲板`)
+  } else if (gap === 2 && lbc >= 2) {
+    score = 56
+    label = '梯队节点'
+    role = 'ladder'
+    why.push(`距空间板 ${gap} 板，属于中位梯队`)
+  } else {
+    const cleanSeal =
+      blow === 0 && sealRatio >= 1.5 && turnover <= 20 && minutes <= 60 && lbc >= 2
+    if (cleanSeal) {
+      score = 52
+      label = '补涨节点'
+      role = 'ladder'
+      why.push('空间板之外的低位强封核心，走补涨 / 接力')
+    } else {
+      score = 44
+      label = '梯队跟随'
+      role = 'follower'
+      why.push(`距空间板 ${gap} 板，节点地位弱`)
+    }
+  }
+
+  if (weakKind === 'downReversal' || weakKind === 'blowReversal' || weakKind === 'lame') {
+    score = Math.max(score, weakKind === 'lame' ? 72 : 82)
+    label = '转势板'
+    role = 'reversal'
+    why.push(`${weakLabel}，具备情绪修复的转势属性`)
+  }
+
+  if (role === 'space' && (phaseKey === 'repair' || phaseKey === 'feast')) {
+    label = '破局龙'
+    role = 'breaker'
+    why.push(`${phaseKey === 'feast' ? '主升发酵' : '修复'}期空间板，负责打开高度`)
+    if (signal.attack) score += 4
+  }
+
+  let env = 0
+  if (phaseKey === 'feast') env += 5
+  else if (phaseKey === 'repair') env += 3
+  else if (phaseKey === 'ebb') env -= 8
+  else if (phaseKey === 'ice') env -= 12
+  if (signal.attack) env += 3
+  if (signal.defense) env -= 5
+  if (premium != null) env += premium >= 2 ? 2 : premium < 0 ? -4 : 0
+  if (promote != null) env += promote >= 50 ? 2 : promote < 30 ? -4 : 0
+  if (blowRate != null && blowRate >= 40) env -= 4
+  env = Math.max(-18, Math.min(10, env))
+  score += env
+
+  let quality = 0
+  if (blow > 0) quality -= Math.min(12, blow * 2)
+  if (turnover > 30) quality -= 8
+  else if (turnover > 20) quality -= 4
+  if (sealRatio > 0 && sealRatio < 1) quality -= 5
+  if (minutes > 120) quality -= 3
+  if (isLeader) score += 2
+  if (sector && sector.dataReady) score += 2
+
+  score = Math.round(clamp(score + quality, 0, 100))
+
+  const dirty = blow >= 3 || turnover >= 35
+  let tone = 'ok'
+  if (role === 'breaker' || role === 'space') tone = 'hot'
+  if (role === 'follower' || role === 'fresh') tone = 'dim'
+  if (dirty) {
+    if (role !== 'follower' && role !== 'fresh') tone = 'risk'
+    if (role === 'breaker' || role === 'space') label = '高位空间板'
+  }
+  if (role === 'reversal') tone = dirty ? 'risk' : 'hot'
+
+  if (dirty) {
+    risks.push(
+      role === 'follower'
+        ? `炸板 ${blow} 次 / 换手 ${round(turnover, 1)}%，封板质量打折`
+        : `${label}但炸板 ${blow} 次 / 换手 ${round(turnover, 1)}%，只验证不接力`
+    )
+  }
+  if (lbc >= 5) risks.push('高位节点，次日分歧波动放大')
+  if (turnover > 0 && turnover < 3) risks.push('换手偏低，缺少分歧换手')
+  if (!sector) risks.push('板块缺失，节点缺少共振')
+  else if (!sector.dataReady) risks.push('板块三关未过，节点只能观察')
+  if (role === 'follower') risks.push('不是空间 / 卡位节点，只是梯队跟随')
+  if (signal.defense) risks.push('市场防守窗口，节点票也容易补跌')
+
+  const summary =
+    `${label} ${score} 分：空间 ${maxBoard} 板 · ` +
+    `${gap === 0 ? '处在最高板' : `距顶 ${gap} 板`} · ` +
+    `情绪适配 ${sentimentFit} / 高度适配 ${heightFit} / 市值适配 ${capFit}`
+
+  return {
+    score,
+    label,
+    role,
+    tone,
+    gap,
+    maxBoard,
+    sentimentFit,
+    capFit,
+    heightFit,
+    env,
+    quality,
+    capYi: round(capYi, 1),
+    weakKind,
+    dirty,
+    summary,
+    why: why.slice(0, 3),
+    risks: Array.from(new Set(risks)).slice(0, 3)
+  }
+}
+
+function buildNodeBoard(sentiment) {
+  const s = sentiment || {}
+  const tier = s.tierCounts || {}
+  const maxBoard = num(s.maxBoard, 0)
+  const phaseKey = s.phaseKey || 'mixed'
+  const signal = s.signal || {}
+  const premium = s.premium && s.premium.avg != null ? num(s.premium.avg, 0) : null
+  const promote =
+    s.promotion && s.promotion.overall ? num(s.promotion.overall.rate, null) : null
+  const blowRate = num(s.blowRate, null)
+  const sentimentFit = sentimentFitOf(s)
+  let hint
+  if (phaseKey === 'ice') hint = '冰点期不接空间板，等首个转势板确认'
+  else if (signal.defense) hint = `防守窗口，节点票也只观察；当前空间 ${maxBoard} 板`
+  else if (maxBoard >= 3) {
+    hint = `空间板 ${maxBoard} 板；卡位看 ${maxBoard - 1} 板，转势看弱转强回封`
+  } else hint = '没有明显空间节点，只做低位确认'
+  return {
+    maxBoard,
+    first: num(tier.first, 0),
+    mid: num(tier.mid, 0),
+    high: num(tier.high, 0),
+    phaseKey,
+    phaseLabel: s.phase && s.phase.label ? s.phase.label : '',
+    signalLabel: signal.label || '',
+    premium,
+    promote,
+    blowRate,
+    sentimentFit,
+    hint
+  }
+}
+
+/* 准备池统一公式：基因 30 + 基础 14 + 热度 10 + 弱转强 8 + 情绪 10 + 节点 12 + 高度 10 + 市值 6 */
+function prepBaseScore({ gene, base, heat, weak, sentimentFit, node, heightFit, capFit }) {
+  return Math.round(
+    clamp(
+      0.3 * num(gene, 50) +
+        0.14 * num(base, 50) +
+        0.1 * num(heat, 40) +
+        0.08 * num(weak, 50) +
+        0.1 * num(sentimentFit, 50) +
+        0.12 * num(node, 45) +
+        0.1 * num(heightFit, 50) +
+        0.06 * num(capFit, 50),
+      0,
+      99
+    )
+  )
+}
+
+/* ------------------------------------------------------------------ *
  * 准备池候选：选股结果 + 各主线板块龙头 + 各板块强封核心
  * 选股分会被炸板 / 过热换手重罚，龙头可能因此掉出前 8；
  * 准备池必须把板块最高板龙头找回来，并把罚分原因明示，而不是静默消失。
@@ -684,7 +965,7 @@ function candidateUniverse(dashboard) {
   return { entries: Array.from(entries.values()), sectorByKey }
 }
 
-/* 准备池排序：只收 2 板以上连板核心；基因 42% + 基础分 22% + 热度 14% + 高度 10% + 弱转强 12%，再做核心修正 */
+/* 准备池排序：只收 2 板以上连板核心；多因子后做核心修正 */
 function prepRank(entries, sentiment, profile) {
   return entries
     .filter((e) => e.stock && num(e.stock.price, null) != null)
@@ -713,23 +994,31 @@ function prepRank(entries, sentiment, profile) {
         gene.fit && gene.fit.staticScore != null ? gene.fit.staticScore : 60
       )
       const heat = sector && sector.heat != null ? sector.heat : 40
-      const height = clamp((num(e.stock.lbc, 1) / 5) * 100, 0, 100)
       const weakScore = gene.weak && gene.weak.score != null ? gene.weak.score : 50
-      const basePrep = Math.round(
-        clamp(
-          0.42 * gene.score + 0.22 * base + 0.14 * heat + 0.1 * height + 0.12 * weakScore,
-          0,
-          99
-        )
+      const node = nodeModelOf(
+        { ...e.stock, weak: e.stock.weak || gene.weak || null },
+        sector,
+        sentiment
       )
+      const basePrep = prepBaseScore({
+        gene: gene.score,
+        base,
+        heat,
+        weak: weakScore,
+        sentimentFit: node.sentimentFit,
+        node: node.score,
+        heightFit: node.heightFit,
+        capFit: node.capFit
+      })
       const core = coreAdjustOf(e.stock, sector)
       const prepScore = Math.round(clamp(basePrep - core.total, 0, 99))
-      return { ...e, gene, core, basePrep, prepScore }
+      return { ...e, gene, core, node, basePrep, prepScore }
     })
     .sort(
       (a, b) =>
         b.prepScore - a.prepScore ||
         a.core.total - b.core.total ||
+        b.node.score - a.node.score ||
         b.gene.score - a.gene.score
     )
 }
@@ -741,7 +1030,7 @@ function buildPreview(dashboard, profile) {
   return ranked
     .filter((x) => x.prepScore >= 40)
     .slice(0, 5)
-    .map(({ stock: p, sector, gene, core, basePrep, prepScore }, i) => {
+    .map(({ stock: p, sector, gene, core, node, basePrep, prepScore }, i) => {
     const fit = gene.fit
     const close = num(p.price, null)
     const limitRatio = limitRatioFor(p.code)
@@ -757,13 +1046,19 @@ function buildPreview(dashboard, profile) {
       num(p.score != null ? p.score : base, 0) >= 65 &&
       p.lbc >= 2 &&
       p.lbc <= 5 &&
-      !(p.blowCount > 0)
+      !(p.blowCount > 0) &&
+      node.score >= 50 &&
+      node.tone !== 'risk'
     const coreWhy =
       core.total > 0
         ? `核心修正 -${core.total}：${core.penalties.join(' · ')}`
         : `核心校验：无炸板/过热/薄封扣分，${core.label}`
+    const nodeLine =
+      `节点 ${node.label} ${node.score}：${node.why[0] || '节点中性'}` +
+      ` · 情绪适配 ${node.sentimentFit} / 高度适配 ${node.heightFit} / 市值适配 ${node.capFit}`
     const why = [
       `准备池 ${prepScore} 分（修正前 ${basePrep}）：基因 ${gene.score} / 基础分 ${base} / 热度 ${heat == null ? '--' : heat} / 弱转强 ${gene.weak ? gene.weak.label : '--'}`,
+      nodeLine,
       coreWhy,
       ...(p.fromSectorLeader
         ? [`${sector ? sector.name : p.sector || '板块'} ${p.lbc} 板龙头，被炸板 / 换手惩罚后仍纳入核验`]
@@ -787,6 +1082,18 @@ function buildPreview(dashboard, profile) {
       coreWhy,
       strongSeal: !!core.strongSeal,
       fromCoreScan: !!p.fromCoreScan,
+      node,
+      nodeScore: node.score,
+      nodeLabel: node.label,
+      nodeTone: node.tone,
+      nodeWhy: node.why,
+      nodeRisks: node.risks,
+      nodeSummary: node.summary,
+      sentimentFit: node.sentimentFit,
+      capFit: node.capFit,
+      heightFit: node.heightFit,
+      marketMax: node.maxBoard,
+      nodeGap: node.gap,
       lbc: p.lbc,
       price: close,
       limitRatio,
@@ -809,10 +1116,11 @@ function buildPreview(dashboard, profile) {
       dataReady: !!(sector && sector.dataReady),
       tags: [
         ...(acceptable ? ['隔夜候选'] : ['观察池']),
-        ...(gene.tags || []),
         ...(p.roleLabel ? [p.roleLabel] : []),
         core.label,
-        ...(core.strongSeal ? ['强封核心'] : [])
+        ...(node.tone === 'risk' ? ['节点风险'] : []),
+        ...(core.strongSeal ? ['强封核心'] : []),
+        ...(gene.tags || [])
       ]
         .filter((v, idx, arr) => arr.indexOf(v) === idx)
         .slice(0, 6),
@@ -821,6 +1129,7 @@ function buildPreview(dashboard, profile) {
       risks: Array.from(
         new Set([
           ...(gene.risks || []),
+          ...(node.risks || []),
           ...(core.mid ? ['容量中军，短线弹性弱于小盘核心'] : []),
           ...(core.label === '高位分歧' ? ['高位分歧，次日只观察不接力'] : []),
           ...(p.fromCoreScan ? ['非板块最高板，需同板块龙头同步走强'] : [])
@@ -864,6 +1173,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
         phase: dashboard.sentiment ? dashboard.sentiment.phase : null
       },
       gate: dashboard.gate,
+      nodeBoard: buildNodeBoard(dashboard.sentiment),
       active: false,
       intraday: false,
       universe: pool.length,
@@ -874,7 +1184,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       notes: [
         stage.note,
         '非交易时段不计算竞价 / 盘中分，避免把历史涨幅伪装成实时强度。',
-        '下方准备池按弱转强、板块地位、封板质量与历史画像选最强 5 只，用于下一场竞价前准备。',
+        '下方准备池按节点、情绪、连板高度、流通市值、弱转强与封板质量选最强 5 只，用于下一场竞价前准备。',
         profile ? '准备池已叠加老龙头画像匹配；画像只是样本统计，不是准确率。' : '老龙头画像尚未就绪，当前只展示基础条件。'
       ],
       source: '东方财富涨停池 + 腾讯行情；竞价 9:15–9:30 / 盘中 9:30–15:00 计算'
@@ -1115,6 +1425,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
         amountRatio: c.amountRatio
       }
     })
+    const node = nodeModelOf({ ...c, weak }, sector, dashboard.sentiment)
 
     let score
     if (stage.intraday) {
@@ -1197,6 +1508,9 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       )
     }
     if (weak && weak.kind !== 'fresh') reasons.push(`弱转强：${weak.detail}`)
+    if (node.label !== '低位跟随' && node.label !== '无高度') {
+      reasons.push(`节点：${node.label} · ${node.why[0] || node.summary}`)
+    }
     reasons.push(
       ...gene.why.filter((w) => !w.startsWith('「') && !w.startsWith('实时 ')).slice(0, 2)
     )
@@ -1219,6 +1533,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     if (c.lbc >= 5) risks.push('高位股，分歧时波动放大')
     if (c.blowCount > 0) risks.push(`昨日炸板 ${c.blowCount} 次`)
     if (!c.fromPool) risks.push('非涨停池成员，缺少昨日封板质量数据')
+    risks.push(...(node.risks || []).slice(0, 1))
     risks.push(...(gene.risks || []).slice(0, 2))
 
     const tags = []
@@ -1235,6 +1550,9 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     if (c.sectorReady) tags.push('三关通过')
     if (!c.fromPool) tags.push(c.scanned ? '全市场扫描' : '非涨停池')
     if (weak && weak.score >= 66) tags.push(weak.label)
+    if (node.score >= 55 && node.label !== '低位跟随' && node.label !== '无高度') {
+      tags.push(node.label)
+    }
     tags.push(...(gene.tags || []))
 
     strong.push({
@@ -1268,6 +1586,16 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       blowCount: c.blowCount,
       score,
       geneScore: gene.score,
+      node,
+      nodeScore: node.score,
+      nodeLabel: node.label,
+      nodeTone: node.tone,
+      nodeWhy: node.why,
+      sentimentFit: node.sentimentFit,
+      capFit: node.capFit,
+      heightFit: node.heightFit,
+      marketMax: node.maxBoard,
+      nodeGap: node.gap,
       status,
       statusLabel: auctionLabel(status, stage.key),
       weak: weak || null,
@@ -1288,7 +1616,9 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     })
   }
 
-  strong.sort((a, b) => b.score - a.score)
+  strong.sort(
+    (a, b) => b.score - a.score || (b.nodeScore || 0) - (a.nodeScore || 0)
+  )
   const top = strong
     .filter((x) => x.status !== 'drop')
     .slice(0, 5)
@@ -1312,6 +1642,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   if (stage.key === 'final') notes.push('竞价定稿后仍需看 9:30 后是否放量承接；高开低走按失败处理。')
   if (stage.frozen) notes.push('午间冻结：价格不再变化，13:00 后再看资金是否继续。')
   if (quoteResult.stale) notes.push('行情返回了缓存快照，请留意时间戳。')
+  notes.push('节点标签只说明连板梯队地位（空间 / 卡位 / 转势 / 跟随），不改变竞价硬条件和仓位纪律。')
 
   return {
     ok: true,
@@ -1328,6 +1659,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       phase: dashboard.sentiment ? dashboard.sentiment.phase : null
     },
     gate: dashboard.gate,
+    nodeBoard: buildNodeBoard(dashboard.sentiment),
     universe: live.length,
     scanUniverse: live.filter((x) => x.scanned).length,
     strongCount,
@@ -1423,7 +1755,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     position: '单票 ≤ 10%，隔夜总仓 ≤ 30%；没有催化核验则不下单。'
   }
 
-  function toOvernightItem(stock, sector, geneIn = null, prepScoreIn = null) {
+  function toOvernightItem(stock, sector, geneIn = null, rankInfo = null) {
     const sectorObj = sector || null
     const gene =
       stock.gene ||
@@ -1435,6 +1767,14 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
         sentiment: dashboard.sentiment,
         profile
       })
+    const node =
+      rankInfo && rankInfo.node
+        ? rankInfo.node
+        : nodeModelOf(
+            { ...stock, weak: stock.weak || (gene && gene.weak) || null },
+            sectorObj,
+            dashboard.sentiment
+          )
     const close = num(stock.price, null)
     if (close == null) return null
     const limitRatio = limitRatioFor(stock.code)
@@ -1454,7 +1794,9 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       overnightScore >= 65 &&
       stock.lbc >= 2 &&
       stock.lbc <= 5 &&
-      !(stock.blowCount > 0)
+      !(stock.blowCount > 0) &&
+      node.score >= 50 &&
+      node.tone !== 'risk'
     const core = coreAdjustOf(stock, sectorObj)
 
     const tags = []
@@ -1466,30 +1808,37 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     if (stock.lbc >= 4) tags.push('高位加速')
     if (stock.blowCount > 0) tags.push('炸板瑕疵')
     tags.push(core.label)
+    if (node.tone === 'risk') tags.push('节点风险')
     if (core.strongSeal) tags.push('强封核心')
 
-    const basePrep = Math.round(
-      clamp(
-        0.42 * gene.score +
-          0.22 * baseScore +
-          0.14 * heat +
-          0.1 * clamp((num(stock.lbc, 1) / 5) * 100, 0, 100) +
-          0.12 * (gene.weak && gene.weak.score != null ? gene.weak.score : 50),
-        0,
-        99
-      )
-    )
+    const basePrep =
+      rankInfo && rankInfo.basePrep != null
+        ? rankInfo.basePrep
+        : prepBaseScore({
+            gene: gene.score,
+            base: baseScore,
+            heat,
+            weak: gene.weak && gene.weak.score != null ? gene.weak.score : 50,
+            sentimentFit: node.sentimentFit,
+            node: node.score,
+            heightFit: node.heightFit,
+            capFit: node.capFit
+          })
     const prepScore =
-      prepScoreIn != null
-        ? prepScoreIn
+      rankInfo && rankInfo.prepScore != null
+        ? rankInfo.prepScore
         : Math.round(clamp(basePrep - core.total, 0, 99))
     const coreWhy =
       core.total > 0
         ? `核心修正 -${core.total}：${core.penalties.join(' · ')}`
         : `核心校验：无炸板/过热/薄封扣分，${core.label}`
+    const nodeLine =
+      `节点 ${node.label} ${node.score}：${node.why[0] || '节点中性'}` +
+      ` · 情绪适配 ${node.sentimentFit} / 高度适配 ${node.heightFit} / 市值适配 ${node.capFit}`
     const why = Array.from(
       new Set([
         `准备池 ${prepScore} 分（修正前 ${basePrep}）：基因 ${gene.score} / 基础分 ${baseScore} / 板块热度 ${heat} / 弱转强 ${gene.weak ? gene.weak.label : '--'}`,
+        nodeLine,
         coreWhy,
         ...(stock.fromSectorLeader
           ? [`${sectorObj ? sectorObj.name : stock.sector || '板块'} ${stock.lbc} 板龙头，被炸板 / 换手惩罚后仍纳入核验`]
@@ -1505,6 +1854,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     const risks = Array.from(
       new Set([
         ...(gene.risks || []),
+        ...(node.risks || []),
         ...(stock.blowCount > 0 ? [`昨日炸板 ${stock.blowCount} 次`] : []),
         ...(stock.lbc >= 5 ? ['高位连板，分歧波动放大'] : []),
         ...(core.mid ? ['容量中军，短线弹性弱于小盘核心'] : []),
@@ -1528,6 +1878,18 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       coreWhy,
       strongSeal: !!core.strongSeal,
       fromCoreScan: !!stock.fromCoreScan,
+      node,
+      nodeScore: node.score,
+      nodeLabel: node.label,
+      nodeTone: node.tone,
+      nodeWhy: node.why,
+      nodeRisks: node.risks,
+      nodeSummary: node.summary,
+      sentimentFit: node.sentimentFit,
+      capFit: node.capFit,
+      heightFit: node.heightFit,
+      marketMax: node.maxBoard,
+      nodeGap: node.gap,
       lbc: stock.lbc,
       close,
       limitRatio,
@@ -1549,6 +1911,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       firstSealLabel: stock.firstSealLabel || '--:--',
       sealRatio: round(stock.sealRatio, 2),
       turnover: stock.turnover != null ? round(stock.turnover, 2) : null,
+      floatCap: stock.floatCap == null ? null : stock.floatCap,
       tags: Array.from(new Set(tags)).slice(0, 6),
       why: why.slice(0, 7),
       reasons: why.slice(0, 7),
@@ -1560,9 +1923,14 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
 
   const ranked = prepRank(candidateUniverse(dashboard).entries, dashboard.sentiment, profile)
   const allItems = ranked
-    .map((e) => toOvernightItem(e.stock, e.sector, e.gene, e.prepScore))
+    .map((e) => toOvernightItem(e.stock, e.sector, e.gene, e))
     .filter(Boolean)
-    .sort((a, b) => b.prepScore - a.prepScore)
+    .sort(
+      (a, b) =>
+        b.prepScore - a.prepScore ||
+        a.coreAdjust - b.coreAdjust ||
+        b.nodeScore - a.nodeScore
+    )
 
   const recommendations = allItems.filter((x) => x.acceptable).slice(0, 5)
   const preparation = allItems
@@ -1589,6 +1957,8 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
   const rules = [
     '只在三关通过 + 情绪修复/主升时制定隔夜计划；冰点、退潮、混沌都不挂。',
     '资金承接按四项证据核对：主力两日净流入、量能、封单、溢价/晋级；不是只看一条资金线。',
+    '节点优先：空间板 / 卡位 / 转势板 > 梯队跟随；但高位空间板炸板多、换手过热时只验证不接力。',
+    '流通市值看 50–120 亿的短线弹性区；200 亿以上按中军处理，500 亿以上降权。',
     '弱转强优先：跌停反包 / 炸板回封 / 烂板转强 > 连板晋级 > 新晋首板。',
     '只做板块核心，不做杂毛补涨；没有催化核验的标的不进入计划。',
     '竞价高开 1%–4% 才执行；高开超过 6% 放弃，低开超过 -2% 放弃。',
@@ -1610,6 +1980,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       phase,
       score: dashboard.sentiment ? dashboard.sentiment.score : null
     },
+    nodeBoard: buildNodeBoard(dashboard.sentiment),
     dataReady,
     recommendations,
     preparation,
@@ -1621,7 +1992,8 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     notes: [
       mode.note,
       '“隔夜单”是高风险计划：本页只提供条件与纪律，不保证成交价，也不保证次日溢价。',
-      '准备池按弱转强、板块地位、封板质量、筹码与历史画像综合排序；未满足三关 + 情绪 + 画像的，只进观察池。',
+      '准备池按节点、情绪适配、连板高度、流通市值、弱转强、封板质量与历史画像综合排序；未满足三关 + 情绪 + 画像 + 节点的，只进观察池。',
+      '节点票模型参考公开的情绪周期、空间板、弱转强、中小流通盘与连板晋级思路；没有可验证的高胜率开源短线项目，分数是过滤器不是胜率。',
       '历史画像来自样本统计，不是准确率；样本外失效、风格切换都可能导致亏损。'
     ],
     source: '东方财富涨停池 / 板块资金 + 腾讯行情 + 历史样本统计'

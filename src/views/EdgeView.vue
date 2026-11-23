@@ -627,6 +627,22 @@ onBeforeUnmount(() => {
       </div>
 
       <template v-if="auction">
+        <div v-if="auction.nodeBoard" class="node-strip">
+          <div class="ns-top">
+            <span class="chip chip--red">{{ auction.nodeBoard.maxBoard }} 板空间</span>
+            <span class="chip chip--gold">情绪适配 {{ auction.nodeBoard.sentimentFit }}</span>
+            <span class="chip chip--dim">3 板+ {{ auction.nodeBoard.high || 0 }} 家</span>
+            <span class="chip chip--dim">2 板 {{ auction.nodeBoard.mid || 0 }} 家</span>
+          </div>
+          <p>{{ auction.nodeBoard.hint }}</p>
+          <small>
+            情绪 {{ auction.nodeBoard.phaseLabel || '--' }}
+            · 晋级 {{ auction.nodeBoard.promote == null ? '--' : auction.nodeBoard.promote + '%' }}
+            · 溢价 {{ auction.nodeBoard.premium == null ? '--' : auction.nodeBoard.premium + '%' }}
+            · 炸板率 {{ auction.nodeBoard.blowRate == null ? '--' : auction.nodeBoard.blowRate + '%' }}
+          </small>
+        </div>
+
         <div class="mini-stats">
           <div class="mini-stat">
             <b class="is-up">{{ auctionActive ? auctionActionable : auctionCards.length }}</b>
@@ -699,6 +715,10 @@ onBeforeUnmount(() => {
             <span class="chip" :class="statusChipClass(c)">{{ c.displayLabel }}</span>
             <span class="chip" :class="catChipClass(c.cat)">{{ c.cat.label }}</span>
             <span v-for="tag in c.tags" :key="tag" class="tag">{{ tag }}</span>
+            <span
+              v-if="auctionActive && c.nodeLabel && !c.tags.includes(c.nodeLabel)"
+              class="tag"
+            >{{ c.nodeLabel }} {{ c.nodeScore }}</span>
           </div>
 
           <div class="metric-grid">
@@ -999,8 +1019,10 @@ onBeforeUnmount(() => {
             <details class="on-detail">
               <summary>查看评分与画像依据</summary>
               <p class="dim">
-                隔夜分 = 50% 基础分 + 30% 基因分 + 20% 板块热度；准备分 = 42% 基因 + 22% 基础 + 14% 热度
-                + 10% 高度 + 12% 弱转强。基础 {{ c.baseScore }}，基因 {{ c.geneScore }}，画像
+                隔夜分 = 50% 基础分 + 30% 基因分 + 20% 板块热度；准备分 = 30% 基因 + 14% 基础
+                + 10% 热度 + 8% 弱转强 + 10% 情绪适配 + 12% 节点 + 10% 连板高度 + 6% 流通市值，再扣核心修正。
+                基础 {{ c.baseScore }}，基因 {{ c.geneScore }}，节点 {{ c.nodeLabel }} {{ c.nodeScore }}（情绪
+                {{ c.sentimentFit }} / 高度 {{ c.heightFit }} / 市值 {{ c.capFit }}），画像
                 {{ c.fit.score }}（静态 {{ c.fit.staticScore }} / 样本
                 {{ c.fit.empiricalScore == null ? '--' : c.fit.empiricalScore }}）。
               </p>
@@ -1039,9 +1061,11 @@ onBeforeUnmount(() => {
             <span class="section-count">按准备分排序 · 只解释不挂单</span>
           </header>
           <p class="section-note">
-            准备池 = 基因 42% + 基础 22% + 板块热度 14% + 高度 10% + 弱转强 12%，再扣核心修正：
-            炸板每次 -4、换手 >20% 每点 -0.6、容量中军 -4、5 板以上 -6、封单 <1% -6。只收 2 板以上，不足 5 只不硬凑；
-            板块最高板龙头即使被罚分挤出准备池，也会留在下方观察并明示原因。
+            准备池 = 基因 30% + 基础 14% + 板块热度 10% + 弱转强 8% + 情绪适配 10%
+            + 节点 12% + 连板高度 10% + 流通市值 6%，再扣核心修正：炸板每次 -4、换手 >20% 每点 -0.6、
+            容量中军 -4、5 板以上 -6、封单 <1% -6。节点看空间板 / 卡位 / 转势 / 补涨，高度相对市场空间板，
+            市值 50–120 亿最适配短线；只收 2 板以上，不足 5 只不硬凑；板块最高板龙头即使被罚分挤出准备池，
+            也会留在下方观察并明示原因。
           </p>
 
           <article
@@ -1065,6 +1089,19 @@ onBeforeUnmount(() => {
               <div class="prep-score">
                 <b>{{ c.prepScore }}</b>
                 <small>准备分</small>
+              </div>
+            </div>
+
+            <div v-if="c.nodeLabel" class="prep-node" :class="`node-tone--${c.nodeTone || 'ok'}`">
+              <div class="pn-main">
+                <b>{{ c.nodeLabel }}</b>
+                <span class="mono">{{ c.nodeScore }}</span>
+                <small>{{ (c.nodeWhy && c.nodeWhy[0]) || '节点中性' }}</small>
+              </div>
+              <div class="pn-fits">
+                <span>情绪 {{ c.sentimentFit }}</span>
+                <span>高度 {{ c.heightFit }}</span>
+                <span>市值 {{ c.capFit }}</span>
               </div>
             </div>
 
@@ -1107,6 +1144,9 @@ onBeforeUnmount(() => {
               <div class="watch-main">
                 <b>{{ c.name }}</b>
                 <small>{{ c.sector }} · {{ c.lbc }} 板 · {{ c.boardRule }}</small>
+                <small v-if="c.nodeLabel" class="watch-node">
+                  节点 {{ c.nodeLabel }} {{ c.nodeScore }} · 情绪 {{ c.sentimentFit }} / 高度 {{ c.heightFit }} / 市值 {{ c.capFit }}
+                </small>
                 <small v-if="c.coreWhy" class="watch-core">{{ c.coreWhy }}</small>
               </div>
               <div class="watch-score">
@@ -1658,6 +1698,34 @@ onBeforeUnmount(() => {
   margin-top: 2px;
   font-size: 10.5px;
   letter-spacing: 0.03em;
+  color: var(--dim);
+}
+
+.node-strip {
+  padding: 10px 12px;
+  border: 1px solid rgba(243, 199, 119, 0.22);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(243, 199, 119, 0.08), rgba(9, 13, 20, 0.4));
+}
+
+.ns-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.node-strip p {
+  margin: 7px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-soft);
+}
+
+.node-strip small {
+  display: block;
+  margin-top: 3px;
+  font-size: 10.5px;
+  line-height: 1.5;
   color: var(--dim);
 }
 
@@ -2538,6 +2606,12 @@ onBeforeUnmount(() => {
   line-height: 1.55;
 }
 
+.watch-main small.watch-node {
+  color: #b9a06e;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .watch-score {
   flex: 0 0 auto;
   display: flex;
@@ -2651,6 +2725,70 @@ onBeforeUnmount(() => {
 
 .prep-score small {
   font-size: 9.5px;
+  color: var(--dim);
+}
+
+.prep-node {
+  margin-top: 7px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.prep-node.node-tone--hot {
+  border-color: rgba(255, 84, 96, 0.26);
+  background: rgba(255, 84, 96, 0.06);
+}
+
+.prep-node.node-tone--risk {
+  border-color: rgba(255, 180, 94, 0.3);
+  background: rgba(255, 180, 94, 0.06);
+}
+
+.prep-node.node-tone--dim {
+  opacity: 0.86;
+}
+
+.pn-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pn-main b {
+  font-size: 12.5px;
+  color: var(--gold);
+}
+
+.prep-node.node-tone--hot .pn-main b {
+  color: #ff8a92;
+}
+
+.prep-node.node-tone--risk .pn-main b {
+  color: var(--warn);
+}
+
+.pn-main .mono {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pn-main small {
+  flex: 1 1 100%;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.pn-fits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
   color: var(--dim);
 }
 

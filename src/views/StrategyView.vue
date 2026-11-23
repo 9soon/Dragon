@@ -80,6 +80,24 @@ const coreTiers = [
   ['高位分歧', '5 板以上且多次炸板，或换手 ≥35%。只观察，不接力，不占用核心仓位。']
 ]
 
+const nodeTiers = [
+  ['破局龙', '修复 / 主升期的市场空间板（最高板 ≥3），负责打开高度；封板必须干净，炸板多或爆量只验证。'],
+  ['空间板', '与市场最高板同高，是情绪高度的锚；高位空间板若炸板 ≥3 次或换手 ≥35%，标签降为「高位空间板」并只观察。'],
+  ['卡位节点', '距空间板 1 板且自身 ≥3 板；龙头分歧时第一顺位卡位，次日看谁先封板。'],
+  ['转势板', '昨日跌停 / 炸板 / 烂板，今日回封或转强；情绪由冰点转修复时的关键节点。'],
+  ['梯队节点', '距空间板 2 板的中位连板；只在板块三关与强封条件下使用。'],
+  ['补涨节点', '空间板之外的低位强封核心（2 板、0 炸、封单厚、换手低）；走补涨 / 接力，不追高。'],
+  ['梯队跟随', '距空间板 ≥3 板且封板质量一般；只解释，不占准备池前排。'],
+  ['高位空间板', '5 板以上或与最高板同高，但炸板 ≥3 次或换手 ≥35%；节点价值高但风险更大，只观察。']
+]
+
+const nodeFactors = [
+  ['情绪适配', 10, '冰点 20 / 退潮 36 / 混沌 56 / 修复 74 / 主升 88，再按进攻、溢价、晋级率、炸板率修正。'],
+  ['节点票', 12, '空间 / 卡位 / 转势 / 补涨等结构分；炸板与过热换手会在节点分里再打折。'],
+  ['连板高度', 10, '相对市场空间板打分：同高或离顶 1 板最优先，离顶 ≥3 板只是跟随。'],
+  ['流通市值', 6, '50–120 亿最适配短线；200 亿以上按中军降权，500 亿以上明显降权。']
+]
+
 const roles = [
   {
     key: 'dragon',
@@ -499,7 +517,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
     <section class="section">
       <header class="section-head">
-        <span class="section-title">情绪周期 · 弱转强 · 基因分</span>
+        <span class="section-title">情绪周期 · 节点票 · 基因分</span>
         <span class="section-count">把“强”拆成可解释的分数</span>
       </header>
 
@@ -534,13 +552,39 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
             <span class="mono">{{ g[1] }}%</span>
           </div>
           <div class="gene-bar">
-            <i :style="{ width: `${g[1] * 5}%` }"></i>
+            <i :style="{ width: `${Math.min(100, g[1] * 5)}%` }"></i>
           </div>
           <p>{{ g[2] }}</p>
         </div>
         <p class="gene-note">
-          准备池只收 2 板以上：42% 基因 + 22% 基础分 + 14% 板块热度 + 10% 高度 + 12% 弱转强，再扣核心修正。
+          准备池只收 2 板以上：30% 基因 + 14% 基础分 + 10% 板块热度 + 8% 弱转强 + 10% 情绪适配
+          + 12% 节点 + 10% 连板高度 + 6% 流通市值，再扣核心修正。
           最终个股分 = 72% 角色初筛 + 28% 基因。所有分数只用于横向比较，不承诺胜率。
+        </p>
+      </div>
+
+      <div class="panel panel-pad core-panel node-panel">
+        <h4>节点票分层 · 空间 / 卡位 / 转势 / 补涨</h4>
+        <div v-for="n in nodeTiers" :key="n[0]" class="core-row">
+          <span class="core-tag" :class="{ 'is-core': n[0] === '破局龙' || n[0] === '卡位节点' }">{{ n[0] }}</span>
+          <p>{{ n[1] }}</p>
+        </div>
+        <div class="node-weights">
+          <div v-for="n in nodeFactors" :key="n[0]" class="gene-row">
+            <div class="gene-label">
+              <b>{{ n[0] }}</b>
+              <span class="mono">{{ n[1] }}%</span>
+            </div>
+            <div class="gene-bar">
+              <i :style="{ width: `${Math.min(100, n[1] * 6)}%` }"></i>
+            </div>
+            <p>{{ n[2] }}</p>
+          </div>
+        </div>
+        <p class="gene-note">
+          节点分 = 结构分（空间 / 卡位 / 转势 / 补涨）+ 情绪修正 − 封板质量扣分；高位空间板炸板多、换手过热时只验证不接力。
+          参考公开短线与量化资料里较稳定的情绪周期、空间板、弱转强、中小流通盘与连板晋级因子；
+          没有可验证的高胜率开源短线项目，这些分数是过滤与排序工具，不是胜率预测。
         </p>
       </div>
 
@@ -553,8 +597,9 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         <p class="gene-note">
           核心修正：炸板每次 −4（上限 −24）、换手 &gt;20% 每点 −0.6（上限 −14）、容量中军 −4、
           5 板以上 −6、封单 &lt;1% −6、流通 &lt;20 亿 −4、首封晚于 10:30 −4。
-          今日示例：中京电子 6 次炸板 + 30.3% 换手 + 86 亿流通 → 容量中军，修正 −34，跌出准备池；
-          荣联科技 2 板 0 炸、封单 2.58%、换手 6.0%、流通 52.9 亿 → 核心先锋第 1。
+          今日示例：中京电子 6 次炸板 + 30.3% 换手 + 86 亿流通 → 容量中军，核心修正 −34，虽然 3 板高于荣联，
+          但节点质量被炸板拖到 50 分，跌出准备池；荣联科技 2 板 0 炸、封单 2.58%、换手 6.0%、流通 52.9 亿
+          → 核心先锋 + 补涨节点，准备分第 1。
         </p>
       </div>
     </section>
@@ -645,11 +690,19 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         </div>
         <div class="formula-row">
           <code>隔夜</code>
-          <span>50% 基础分 + 30% 基因分 + 20% 板块热度；严格候选 = 三关 + 情绪修复/主升 + 画像 ≥55 + 隔夜分 ≥65 + 2–5 板 + 昨日无炸板。</span>
+          <span>50% 基础分 + 30% 基因分 + 20% 板块热度；严格候选 = 三关 + 情绪修复/主升 + 画像 ≥55 + 隔夜分 ≥65 + 2–5 板 + 昨日无炸板 + 节点 ≥50 且非高风险节点。</span>
+        </div>
+        <div class="formula-row">
+          <code>节点</code>
+          <span>空间板（与市场最高板同高）/ 破局龙（修复、主升期空间板）/ 卡位（离顶 1 板且 ≥3 板）/ 转势（跌停反包、炸板回封、烂板转强）/ 补涨（低位强封核心）/ 梯队跟随；节点分再扣炸板与过热换手，高位空间板只观察。</span>
+        </div>
+        <div class="formula-row">
+          <code>市值</code>
+          <span>流通 50–120 亿最适配短线；200 亿以上按中军降权，500 亿以上明显降权，20 亿以下视为操控与流动性风险。</span>
         </div>
         <div class="formula-row">
           <code>准备池</code>
-          <span>只收 2 板以上：42% 基因 + 22% 基础分 + 14% 板块热度 + 10% 高度 + 12% 弱转强，再扣核心修正（炸板 / 过热换手 / 容量中军 / 高位 / 薄封 / 晚封）；每个板块的强封核心即使不是最高板也会补入，中军与高位分歧不占前排，只解释不挂单。</span>
+          <span>只收 2 板以上：30% 基因 + 14% 基础分 + 10% 板块热度 + 8% 弱转强 + 10% 情绪适配 + 12% 节点 + 10% 连板高度 + 6% 流通市值，再扣核心修正（炸板 / 过热换手 / 容量中军 / 高位 / 薄封 / 晚封）；高度相对市场空间板计算，每个板块的强封核心即使不是最高板也会补入，中军与高位分歧不占前排，只解释不挂单。</span>
         </div>
         <div class="formula-row">
           <code>画像</code>
@@ -1352,6 +1405,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
 .gene-bar i {
   display: block;
+  max-width: 100%;
   height: 100%;
   border-radius: 3px;
   background: linear-gradient(90deg, rgba(243, 199, 119, 0.55), var(--gold));
@@ -1409,6 +1463,16 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
   font-size: 10.5px;
   line-height: 1.65;
   color: var(--muted);
+}
+
+.node-panel .core-tag {
+  min-width: 68px;
+}
+
+.node-weights {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.07);
 }
 
 .profile-grid {

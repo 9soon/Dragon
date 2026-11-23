@@ -536,10 +536,19 @@ async function buildDashboard() {
       coreLabel: item.coreLabel || '',
       coreAdjust: item.coreAdjust || 0,
       coreWhy: item.coreWhy || '',
+      nodeLabel: item.nodeLabel || '',
+      nodeScore: item.nodeScore != null ? item.nodeScore : null,
+      nodeTone: item.nodeTone || '',
+      nodeWhy: item.nodeWhy && item.nodeWhy.length ? item.nodeWhy[0] : '',
+      sentimentFit: item.sentimentFit != null ? item.sentimentFit : null,
+      capFit: item.capFit != null ? item.capFit : null,
+      heightFit: item.heightFit != null ? item.heightFit : null,
+      marketMax: item.marketMax != null ? item.marketMax : null,
+      floatCap: item.floatCap != null ? item.floatCap : null,
       fromCoreScan: !!item.fromCoreScan,
       acceptable: !!item.acceptable,
       observation: !!item.observation,
-      why: (item.why || item.reasons || []).slice(0, 3),
+      why: (item.why || item.reasons || []).slice(0, 4),
       risks: (item.risks || []).slice(0, 2),
       tags: (item.tags || []).slice(0, 4)
     })
@@ -551,6 +560,7 @@ async function buildDashboard() {
       dataReady: overnight.dataReady,
       recommendations: (overnight.recommendations || []).slice(0, 3).map(trim),
       preparation: (overnight.preparation || []).slice(0, 5).map(trim),
+      nodeBoard: overnight.nodeBoard || null,
       updatedAt: overnight.generatedAt
     }
   } catch (err) {
