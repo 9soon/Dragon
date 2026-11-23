@@ -104,7 +104,7 @@ const rankedThemes = computed(() =>
         </div>
 
         <p v-if="!overnightStrict && overnightPrep.length" class="overnight-caution">
-          今日没有同时满足三关、情绪、画像与封板质量的严格候选。以下为准备池最强票，只观察、不挂单；点「隔夜计划」看完整条件与风险。
+          今日没有同时满足三关、情绪、画像与封板质量的严格候选。以下为准备池最强 2 板以上连板核心，只观察、不挂单；点「隔夜计划」看完整条件与风险。
         </p>
 
         <div v-if="overnightShown.length" class="overnight-list">
@@ -127,6 +127,11 @@ const rankedThemes = computed(() =>
               <span class="chip chip--dim">{{ item.sector || '未分类' }}</span>
               <span class="chip chip--gold">{{ item.lbc }} 板</span>
               <span v-if="item.weakLabel" class="chip chip--blue">{{ item.weakLabel }}</span>
+              <span
+                v-if="item.coreLabel"
+                class="chip"
+                :class="item.coreLabel === '核心先锋' ? 'chip--red' : 'chip--dim'"
+              >{{ item.coreLabel }}</span>
               <span v-if="item.acceptable" class="chip chip--green">严格候选</span>
               <span v-else class="chip chip--dim">观察</span>
             </div>
@@ -136,6 +141,7 @@ const rankedThemes = computed(() =>
               <span class="dim">{{ item.boardRule }}</span>
             </div>
             <p v-if="item.why && item.why.length" class="or-why">{{ item.why[0] }}</p>
+            <p v-if="item.coreWhy" class="or-core">{{ item.coreWhy }}</p>
             <p v-if="item.risks && item.risks.length" class="or-risk">风险：{{ item.risks[0] }}</p>
           </div>
         </div>
@@ -146,7 +152,7 @@ const rankedThemes = computed(() =>
 
         <div class="overnight-foot">
           严格候选 = 三关通过 + 情绪修复/主升 + 画像 ≥55 + 隔夜评分 ≥65 + 2–5 板 + 昨日无炸板。
-          准备池按基因 42% / 基础 22% / 热度 14% / 高度 10% / 弱转强 12% 排序，不代表可以买入。
+          准备池只收 2 板以上：基因 42% / 基础 22% / 热度 14% / 高度 10% / 弱转强 12%，再扣炸板、过热换手、容量中军与薄封；不代表可以买入。
         </div>
       </div>
     </section>
@@ -469,6 +475,7 @@ const rankedThemes = computed(() =>
 }
 
 .or-why,
+.or-core,
 .or-risk {
   margin: 5px 0 0;
   font-size: 11.5px;
@@ -477,6 +484,10 @@ const rankedThemes = computed(() =>
 
 .or-why {
   color: var(--muted);
+}
+
+.or-core {
+  color: var(--gold);
 }
 
 .or-risk {

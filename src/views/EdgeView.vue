@@ -175,8 +175,10 @@ const auctionConfirmLabel = computed(() => {
   return auctionIsIntraday.value ? '封板确认' : '可执行候选'
 })
 const auctionListLabel = computed(() => {
-  if (!auctionActive.value) return '最强 5 只 · 下一场准备'
-  return auctionIsIntraday.value ? '最强 5 只 · 1.5 秒实时' : '最强 5 只 · 1.5 秒轮询'
+  const n = auctionCards.value.length
+  const base = n ? `最强 ${n} 只` : '暂无合格核心'
+  if (!auctionActive.value) return `${base} · 下一场准备`
+  return auctionIsIntraday.value ? `${base} · 1.5 秒实时` : `${base} · 1.5 秒轮询`
 })
 const auctionRingLabel = computed(() => {
   if (!auctionActive.value) return '准备分'
@@ -1032,13 +1034,14 @@ onBeforeUnmount(() => {
         <section v-if="overnightPrepShown.length" class="section">
           <header class="section-head">
             <span class="section-title">
-              {{ overnightRecs.length ? '准备池其余观察' : '准备池 · 最强 5 只' }}
+              {{ overnightRecs.length ? '准备池其余观察' : '准备池 · 2 板以上连板核心' }}
             </span>
             <span class="section-count">按准备分排序 · 只解释不挂单</span>
           </header>
           <p class="section-note">
-            准备池 = 基因 42% + 基础 22% + 板块热度 14% + 高度 10% + 弱转强 12%。
-            板块最高板龙头即使被炸板 / 过热换手罚分挤出选股前八，也会被找回并明示风险；未满足严格条件就不挂单。
+            准备池 = 基因 42% + 基础 22% + 板块热度 14% + 高度 10% + 弱转强 12%，再扣核心修正：
+            炸板每次 -4、换手 >20% 每点 -0.6、容量中军 -4、5 板以上 -6、封单 <1% -6。只收 2 板以上，不足 5 只不硬凑；
+            板块最高板龙头即使被罚分挤出准备池，也会留在下方观察并明示原因。
           </p>
 
           <article
@@ -1104,8 +1107,12 @@ onBeforeUnmount(() => {
               <div class="watch-main">
                 <b>{{ c.name }}</b>
                 <small>{{ c.sector }} · {{ c.lbc }} 板 · {{ c.boardRule }}</small>
+                <small v-if="c.coreWhy" class="watch-core">{{ c.coreWhy }}</small>
               </div>
-              <span class="mono watch-score">{{ c.score }}</span>
+              <div class="watch-score">
+                <b class="mono">{{ c.prepScore != null ? c.prepScore : c.score }}</b>
+                <small>准备分</small>
+              </div>
               <span class="chip" :class="statusChipClass(c)">{{ c.displayLabel }}</span>
             </div>
           </div>
@@ -2526,9 +2533,30 @@ onBeforeUnmount(() => {
   color: var(--dim);
 }
 
+.watch-main small.watch-core {
+  color: var(--gold);
+  line-height: 1.55;
+}
+
 .watch-score {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+}
+
+.watch-score b {
+  display: block;
   font-size: 13.5px;
+  font-weight: 600;
   color: var(--text-soft);
+}
+
+.watch-score small {
+  display: block;
+  font-size: 9.5px;
+  color: var(--dim);
 }
 
 .sector-row {

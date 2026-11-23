@@ -530,13 +530,18 @@ async function buildDashboard() {
       boardRule: item.boardRule,
       score: item.score,
       prepScore: item.prepScore,
+      basePrep: item.basePrep,
       geneScore: item.geneScore,
       weakLabel: item.weakLabel || '',
+      coreLabel: item.coreLabel || '',
+      coreAdjust: item.coreAdjust || 0,
+      coreWhy: item.coreWhy || '',
+      fromCoreScan: !!item.fromCoreScan,
       acceptable: !!item.acceptable,
       observation: !!item.observation,
       why: (item.why || item.reasons || []).slice(0, 3),
       risks: (item.risks || []).slice(0, 2),
-      tags: (item.tags || []).slice(0, 3)
+      tags: (item.tags || []).slice(0, 4)
     })
     dashboard.overnightBrief = {
       status: overnight.status,

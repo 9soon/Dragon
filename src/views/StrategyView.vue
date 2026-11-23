@@ -73,6 +73,13 @@ const geneFactors = [
   ['历史画像', 15, '六维分桶样本延续率合成；少于 3 条样本的桶不参与加权。']
 ]
 
+const coreTiers = [
+  ['核心先锋', '2–5 板，0 炸板，封单 ≥1.5% 流通，换手 3%–20%，首封不晚于 10:30，板块地位靠前。准备池优先，但仍需三关与催化核验。'],
+  ['分歧转强', '有 1–2 次炸板或换手 20%–30%，但当天仍回封。只给观察位，次日竞价确认承接后才考虑。'],
+  ['容量中军', '流通 ≥80 亿且成交 ≥10 亿，或流通 ≥200 亿。容纳大资金但短线弹性弱，不能当连板先锋用。'],
+  ['高位分歧', '5 板以上且多次炸板，或换手 ≥35%。只观察，不接力，不占用核心仓位。']
+]
+
 const roles = [
   {
     key: 'dragon',
@@ -259,7 +266,7 @@ const auctionRules = [
 
 const overnightRules = [
   ['只在三关 + 修复 / 主升', '资金关按四项证据核对；数据未就绪、冰点、退潮、混沌都不挂隔夜单，没有主线时空仓就是最优解。'],
-  ['弱转强优先，只做 2–5 板核心', '跌停反包 / 炸板回封 / 烂板转强 > 连板晋级 > 新晋首板；不碰杂毛补涨，5 板以上只观察，炸过板的不进严格候选。'],
+  ['弱转强优先，只做 2–5 板核心', '跌停反包 / 炸板回封 / 烂板转强 > 连板晋级 > 新晋首板；不碰杂毛补涨，5 板以上只观察，炸过板的不进严格候选；炸板多、换手过热的大市值中军也不占准备池前排。'],
   ['催化必须人工核验', '政策 / 产业 / 事件要有原始信源；纯传闻、无信源小作文、一天脉冲直接排除。'],
   ['条件单而非预测单', '高开 +1% ~ +4% 执行，高开 > +6% 放弃，低开 < -2% 放弃，9:25 跌回平盘失效。'],
   ['仓位和止损写死', '单票 ≤ 10%，隔夜总仓 ≤ 30%；跌破昨收 -3% 或分时均线走弱，先退出再复盘。'],
@@ -532,8 +539,22 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
           <p>{{ g[2] }}</p>
         </div>
         <p class="gene-note">
-          准备池 = 42% 基因 + 22% 基础分 + 14% 板块热度 + 10% 高度 + 12% 弱转强；
+          准备池只收 2 板以上：42% 基因 + 22% 基础分 + 14% 板块热度 + 10% 高度 + 12% 弱转强，再扣核心修正。
           最终个股分 = 72% 角色初筛 + 28% 基因。所有分数只用于横向比较，不承诺胜率。
+        </p>
+      </div>
+
+      <div class="panel panel-pad core-panel">
+        <h4>准备池核心分层 · 先排核心，再排观察</h4>
+        <div v-for="c in coreTiers" :key="c[0]" class="core-row">
+          <span class="core-tag" :class="{ 'is-core': c[0] === '核心先锋' }">{{ c[0] }}</span>
+          <p>{{ c[1] }}</p>
+        </div>
+        <p class="gene-note">
+          核心修正：炸板每次 −4（上限 −24）、换手 &gt;20% 每点 −0.6（上限 −14）、容量中军 −4、
+          5 板以上 −6、封单 &lt;1% −6、流通 &lt;20 亿 −4、首封晚于 10:30 −4。
+          今日示例：中京电子 6 次炸板 + 30.3% 换手 + 86 亿流通 → 容量中军，修正 −34，跌出准备池；
+          荣联科技 2 板 0 炸、封单 2.58%、换手 6.0%、流通 52.9 亿 → 核心先锋第 1。
         </p>
       </div>
     </section>
@@ -628,7 +649,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         </div>
         <div class="formula-row">
           <code>准备池</code>
-          <span>42% 基因 + 22% 基础分 + 14% 板块热度 + 10% 高度 + 12% 弱转强；板块最高板龙头即使被炸板 / 换手罚分挤出选股前八，也会被找回并明示风险，只解释不挂单。</span>
+          <span>只收 2 板以上：42% 基因 + 22% 基础分 + 14% 板块热度 + 10% 高度 + 12% 弱转强，再扣核心修正（炸板 / 过热换手 / 容量中军 / 高位 / 薄封 / 晚封）；每个板块的强封核心即使不是最高板也会补入，中军与高位分歧不占前排，只解释不挂单。</span>
         </div>
         <div class="formula-row">
           <code>画像</code>
@@ -1240,12 +1261,14 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 }
 
 .weak-panel,
-.gene-panel {
+.gene-panel,
+.core-panel {
   margin-bottom: 10px;
 }
 
 .weak-panel h4,
-.gene-panel h4 {
+.gene-panel h4,
+.core-panel h4 {
   margin: 0 0 7px;
   font-size: 12px;
   font-weight: 600;
@@ -1338,6 +1361,44 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
   margin: 4px 0 0;
   font-size: 10.5px;
   line-height: 1.55;
+  color: var(--dim);
+}
+
+.core-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.core-row:last-of-type {
+  border-bottom: 0;
+}
+
+.core-tag {
+  flex: 0 0 auto;
+  min-width: 58px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.core-tag.is-core {
+  border-color: rgba(226, 116, 100, 0.45);
+  background: rgba(226, 116, 100, 0.12);
+  color: #f0a596;
+}
+
+.core-row p {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.6;
   color: var(--dim);
 }
 

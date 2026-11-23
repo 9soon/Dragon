@@ -568,10 +568,61 @@ function auctionLabel(status, stageKey) {
 }
 
 /* ------------------------------------------------------------------ *
- * 准备池候选：选股结果 + 各主线板块龙头
+ * 准备池候选：选股结果 + 各主线板块龙头 + 各板块强封核心
  * 选股分会被炸板 / 过热换手重罚，龙头可能因此掉出前 8；
  * 准备池必须把板块最高板龙头找回来，并把罚分原因明示，而不是静默消失。
+ * 同时补入“不是板块最高板、但封板质量更干净”的核心票（如 2 板 0 炸、封单厚、换手低），
+ * 否则只看龙头会漏掉真正的连板核心，把分歧中军排到第一。
  * ------------------------------------------------------------------ */
+
+function coreAdjustOf(stock, sector) {
+  const blow = num(stock && stock.blowCount, 0)
+  const turnover = num(stock && stock.turnover, 0)
+  const capYi = num(stock && stock.floatCap, 0) / 1e8
+  const amountYi = num(stock && stock.amount, 0) / 1e8
+  const sealRatio = num(stock && stock.sealRatio, 0)
+  const minutes = sealMinutesFromOpen(stock && stock.firstSeal)
+  const lbc = num(stock && stock.lbc, 0)
+
+  const penalties = []
+  let total = 0
+  function add(points, text) {
+    if (points > 0) {
+      total += points
+      penalties.push(`${text} -${points}`)
+    }
+  }
+
+  add(Math.min(24, blow * 4), `炸板 ${blow} 次`)
+  if (turnover > 20) add(Math.min(14, Math.round((turnover - 20) * 0.6)), `换手 ${round(turnover, 1)}% 过热`)
+  if (sealRatio > 0 && sealRatio < 1) add(6, `封单 ${round(sealRatio, 2)}% 偏薄`)
+  if (capYi > 0 && capYi < 20) add(4, '流通盘 <20 亿')
+  if (minutes > 60) add(4, '首封晚于 10:30')
+  if (lbc >= 5) add(6, '高位 5 板+')
+
+  const mid = (capYi >= 80 && amountYi >= 10) || capYi >= 200
+  if (mid) add(4, '容量中军')
+
+  let label = '核心先锋'
+  if (lbc >= 5 && (blow >= 3 || turnover >= 35)) label = '高位分歧'
+  else if (mid) label = '容量中军'
+  else if (blow > 0 || turnover > 20) label = '分歧转强'
+
+  return {
+    total: Math.min(60, total),
+    penalties,
+    label,
+    mid,
+    strongSeal:
+      blow === 0 &&
+      sealRatio >= 1.5 &&
+      turnover <= 20 &&
+      minutes <= 60 &&
+      lbc >= 2,
+    capYi: round(capYi, 1),
+    amountYi: round(amountYi, 1)
+  }
+}
 
 function candidateUniverse(dashboard) {
   const sectors = (dashboard.sectors && dashboard.sectors.all) || []
@@ -598,19 +649,54 @@ function candidateUniverse(dashboard) {
         sectorKey: sector.key,
         role: 'dragon',
         roleLabel: sector.maxBoard >= 2 ? '板块龙头' : '首板先锋',
-        baseScore: Math.round(clamp(0.5 * (sector.heat || 40) + 38, 30, 92)),
+        baseScore: null,
         fromSectorLeader: true
       },
       sector
     })
   }
+  for (const sector of sectors) {
+    const relevant = sector.dataReady || sector.group === 'main' || sector.group === 'new'
+    if (!relevant) continue
+    if (num(sector.heat, 0) < 45) continue
+    for (const stock of sector.stocks || []) {
+      if (!stock || !stock.code || entries.has(stock.code)) continue
+      if (!/^\d{6}$/.test(stock.code)) continue
+      if (/ST|退/i.test(stock.name || '')) continue
+      if (num(stock.lbc, 0) < 2) continue
+      if (num(stock.price, null) == null) continue
+      const core = coreAdjustOf(stock, sector)
+      entries.set(stock.code, {
+        stock: {
+          ...stock,
+          sector: sector.name,
+          sectorKey: sector.key,
+          role: 'core',
+          roleLabel: core.label,
+          baseScore: null,
+          coreClass: core.label,
+          fromCoreScan: true
+        },
+        sector
+      })
+    }
+  }
   return { entries: Array.from(entries.values()), sectorByKey }
 }
 
-/* 准备池排序：基因 42% + 基础分 22% + 板块热度 14% + 高度 10% + 弱转强 12% */
+/* 准备池排序：只收 2 板以上连板核心；基因 42% + 基础分 22% + 热度 14% + 高度 10% + 弱转强 12%，再做核心修正 */
 function prepRank(entries, sentiment, profile) {
   return entries
     .filter((e) => e.stock && num(e.stock.price, null) != null)
+    .filter((e) => num(e.stock.lbc, 0) >= 2)
+    .filter((e) => {
+      const s = e.sector
+      if (!s) return false
+      if (s.dataReady) return true
+      const heat = num(s.heat, 0)
+      const gates = num(s.gatesPassed, 0)
+      return (s.group === 'main' || s.group === 'new') && heat >= 40 && gates >= 1
+    })
     .map((e) => {
       const sector = e.sector
       const gene =
@@ -622,44 +708,68 @@ function prepRank(entries, sentiment, profile) {
           sentiment,
           profile
         })
-      const base = num(e.stock.baseScore != null ? e.stock.baseScore : e.stock.score, 60)
+      const base = num(
+        e.stock.baseScore != null ? e.stock.baseScore : e.stock.score,
+        gene.fit && gene.fit.staticScore != null ? gene.fit.staticScore : 60
+      )
       const heat = sector && sector.heat != null ? sector.heat : 40
       const height = clamp((num(e.stock.lbc, 1) / 5) * 100, 0, 100)
       const weakScore = gene.weak && gene.weak.score != null ? gene.weak.score : 50
-      const prepScore = Math.round(
+      const basePrep = Math.round(
         clamp(
           0.42 * gene.score + 0.22 * base + 0.14 * heat + 0.1 * height + 0.12 * weakScore,
           0,
           99
         )
       )
-      return { ...e, gene, prepScore }
+      const core = coreAdjustOf(e.stock, sector)
+      const prepScore = Math.round(clamp(basePrep - core.total, 0, 99))
+      return { ...e, gene, core, basePrep, prepScore }
     })
-    .sort((a, b) => b.prepScore - a.prepScore)
+    .sort(
+      (a, b) =>
+        b.prepScore - a.prepScore ||
+        a.core.total - b.core.total ||
+        b.gene.score - a.gene.score
+    )
 }
 
 /* 下一场竞价准备池：取最强 5 只，逐只解释入选原因与风险 */
 function buildPreview(dashboard, profile) {
   const sentiment = dashboard.sentiment
   const ranked = prepRank(candidateUniverse(dashboard).entries, sentiment, profile)
-  return ranked.slice(0, 5).map(({ stock: p, sector, gene, prepScore }, i) => {
+  return ranked
+    .filter((x) => x.prepScore >= 40)
+    .slice(0, 5)
+    .map(({ stock: p, sector, gene, core, basePrep, prepScore }, i) => {
     const fit = gene.fit
     const close = num(p.price, null)
     const limitRatio = limitRatioFor(p.code)
     const limitUp = close == null ? null : round(close * (1 + limitRatio), 2)
-    const base = num(p.baseScore != null ? p.baseScore : p.score, 60)
+    const base = num(
+      p.baseScore != null ? p.baseScore : p.score,
+      fit && fit.staticScore != null ? fit.staticScore : 60
+    )
     const heat = sector && sector.heat != null ? sector.heat : null
     const acceptable =
       !!(sector && sector.dataReady) &&
       fit.score >= 55 &&
-      num(p.score, 0) >= 65 &&
+      num(p.score != null ? p.score : base, 0) >= 65 &&
       p.lbc >= 2 &&
       p.lbc <= 5 &&
       !(p.blowCount > 0)
+    const coreWhy =
+      core.total > 0
+        ? `核心修正 -${core.total}：${core.penalties.join(' · ')}`
+        : `核心校验：无炸板/过热/薄封扣分，${core.label}`
     const why = [
-      `准备池 ${prepScore} 分：基因 ${gene.score} / 基础 ${base} / 热度 ${heat == null ? '--' : heat} / 弱转强 ${gene.weak ? gene.weak.label : '--'}`,
+      `准备池 ${prepScore} 分（修正前 ${basePrep}）：基因 ${gene.score} / 基础分 ${base} / 热度 ${heat == null ? '--' : heat} / 弱转强 ${gene.weak ? gene.weak.label : '--'}`,
+      coreWhy,
       ...(p.fromSectorLeader
-        ? [`${sector ? sector.name : p.sector || '板块'} ${p.lbc} 板龙头，选股分被炸板 / 换手惩罚后仍纳入准备池核验`]
+        ? [`${sector ? sector.name : p.sector || '板块'} ${p.lbc} 板龙头，被炸板 / 换手惩罚后仍纳入核验`]
+        : []),
+      ...(p.fromCoreScan
+        ? [`板块内${core.strongSeal ? '强封核心' : '连板补充'}（非最高板）：${p.lbc} 板 · ${p.blowCount === 0 ? '0 炸板' : `炸 ${p.blowCount} 次`} · 换手 ${round(p.turnover, 1)}%`]
         : []),
       ...(gene.why || [])
     ]
@@ -671,6 +781,12 @@ function buildPreview(dashboard, profile) {
       sectorKey: p.sectorKey,
       role: p.role,
       roleLabel: p.roleLabel,
+      coreLabel: core.label,
+      coreAdjust: core.total,
+      corePenalties: core.penalties,
+      coreWhy,
+      strongSeal: !!core.strongSeal,
+      fromCoreScan: !!p.fromCoreScan,
       lbc: p.lbc,
       price: close,
       limitRatio,
@@ -678,6 +794,7 @@ function buildPreview(dashboard, profile) {
       limitUp,
       score: num(p.score, 0),
       baseScore: base,
+      basePrep,
       prepScore,
       geneScore: gene.score,
       weak: p.weak || gene.weak || null,
@@ -693,13 +810,22 @@ function buildPreview(dashboard, profile) {
       tags: [
         ...(acceptable ? ['隔夜候选'] : ['观察池']),
         ...(gene.tags || []),
-        ...(p.roleLabel ? [p.roleLabel] : [])
+        ...(p.roleLabel ? [p.roleLabel] : []),
+        core.label,
+        ...(core.strongSeal ? ['强封核心'] : [])
       ]
         .filter((v, idx, arr) => arr.indexOf(v) === idx)
-        .slice(0, 5),
+        .slice(0, 6),
       factors: gene.factors,
       why: why.slice(0, 7),
-      risks: gene.risks,
+      risks: Array.from(
+        new Set([
+          ...(gene.risks || []),
+          ...(core.mid ? ['容量中军，短线弹性弱于小盘核心'] : []),
+          ...(core.label === '高位分歧' ? ['高位分歧，次日只观察不接力'] : []),
+          ...(p.fromCoreScan ? ['非板块最高板，需同板块龙头同步走强'] : [])
+        ])
+      ).slice(0, 5),
       fit,
       plan: [
         '明日竞价高开 1%–4% 才执行；高于 6% 放弃，低于 -2% 放弃',
@@ -1313,7 +1439,10 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     if (close == null) return null
     const limitRatio = limitRatioFor(stock.code)
     const limitUp = round(close * (1 + limitRatio), 2)
-    const baseScore = num(stock.baseScore != null ? stock.baseScore : stock.score, 60)
+    const baseScore = num(
+      stock.baseScore != null ? stock.baseScore : stock.score,
+      gene.fit && gene.fit.staticScore != null ? gene.fit.staticScore : 60
+    )
     const heat = sectorObj && sectorObj.heat != null ? sectorObj.heat : 40
     const overnightScore = Math.round(
       clamp(0.5 * baseScore + 0.3 * gene.score + 0.2 * heat, 0, 99)
@@ -1326,6 +1455,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       stock.lbc >= 2 &&
       stock.lbc <= 5 &&
       !(stock.blowCount > 0)
+    const core = coreAdjustOf(stock, sectorObj)
 
     const tags = []
     if (acceptable) tags.push('隔夜候选')
@@ -1335,26 +1465,37 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     if (stock.lbc === 2) tags.push('二板确认')
     if (stock.lbc >= 4) tags.push('高位加速')
     if (stock.blowCount > 0) tags.push('炸板瑕疵')
+    tags.push(core.label)
+    if (core.strongSeal) tags.push('强封核心')
 
+    const basePrep = Math.round(
+      clamp(
+        0.42 * gene.score +
+          0.22 * baseScore +
+          0.14 * heat +
+          0.1 * clamp((num(stock.lbc, 1) / 5) * 100, 0, 100) +
+          0.12 * (gene.weak && gene.weak.score != null ? gene.weak.score : 50),
+        0,
+        99
+      )
+    )
     const prepScore =
       prepScoreIn != null
         ? prepScoreIn
-        : Math.round(
-            clamp(
-              0.42 * gene.score +
-                0.22 * baseScore +
-                0.14 * heat +
-                0.1 * clamp((num(stock.lbc, 1) / 5) * 100, 0, 100) +
-                0.12 * (gene.weak && gene.weak.score != null ? gene.weak.score : 50),
-              0,
-              99
-            )
-          )
+        : Math.round(clamp(basePrep - core.total, 0, 99))
+    const coreWhy =
+      core.total > 0
+        ? `核心修正 -${core.total}：${core.penalties.join(' · ')}`
+        : `核心校验：无炸板/过热/薄封扣分，${core.label}`
     const why = Array.from(
       new Set([
-        `准备池 ${prepScore} 分：基因 ${gene.score} / 基础 ${baseScore} / 板块热度 ${heat} / 弱转强 ${gene.weak ? gene.weak.label : '--'}`,
+        `准备池 ${prepScore} 分（修正前 ${basePrep}）：基因 ${gene.score} / 基础分 ${baseScore} / 板块热度 ${heat} / 弱转强 ${gene.weak ? gene.weak.label : '--'}`,
+        coreWhy,
         ...(stock.fromSectorLeader
-          ? [`${sectorObj ? sectorObj.name : stock.sector || '板块'} ${stock.lbc} 板龙头，选股分被炸板 / 换手惩罚后仍纳入准备池核验`]
+          ? [`${sectorObj ? sectorObj.name : stock.sector || '板块'} ${stock.lbc} 板龙头，被炸板 / 换手惩罚后仍纳入核验`]
+          : []),
+        ...(stock.fromCoreScan
+          ? [`板块内${core.strongSeal ? '强封核心' : '连板补充'}（非最高板）：${stock.lbc} 板 · ${stock.blowCount === 0 ? '0 炸板' : `炸 ${stock.blowCount} 次`} · 换手 ${round(stock.turnover, 1)}%`]
           : []),
         ...(gene.why || []),
         `隔夜评分 ${overnightScore}：基础 ${baseScore} / 基因 ${gene.score} / 板块热度 ${heat}`,
@@ -1366,6 +1507,9 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
         ...(gene.risks || []),
         ...(stock.blowCount > 0 ? [`昨日炸板 ${stock.blowCount} 次`] : []),
         ...(stock.lbc >= 5 ? ['高位连板，分歧波动放大'] : []),
+        ...(core.mid ? ['容量中军，短线弹性弱于小盘核心'] : []),
+        ...(core.label === '高位分歧' ? ['高位分歧，次日只观察不接力'] : []),
+        ...(stock.fromCoreScan ? ['非板块最高板，需同板块龙头同步走强'] : []),
         ...(sectorReady ? [] : ['板块三关未过或缺失，只能观察']),
         '隔夜存在跳空风险，条件单不是保本工具'
       ])
@@ -1378,6 +1522,12 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       sectorKey: stock.sectorKey,
       role: stock.role,
       roleLabel: stock.roleLabel,
+      coreLabel: core.label,
+      coreAdjust: core.total,
+      corePenalties: core.penalties,
+      coreWhy,
+      strongSeal: !!core.strongSeal,
+      fromCoreScan: !!stock.fromCoreScan,
       lbc: stock.lbc,
       close,
       limitRatio,
@@ -1385,6 +1535,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       limitUp,
       score: overnightScore,
       baseScore,
+      basePrep,
       prepScore,
       geneScore: gene.score,
       fit: gene.fit,
@@ -1398,9 +1549,9 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       firstSealLabel: stock.firstSealLabel || '--:--',
       sealRatio: round(stock.sealRatio, 2),
       turnover: stock.turnover != null ? round(stock.turnover, 2) : null,
-      tags: Array.from(new Set(tags)).slice(0, 5),
-      why: why.slice(0, 6),
-      reasons: why.slice(0, 6),
+      tags: Array.from(new Set(tags)).slice(0, 6),
+      why: why.slice(0, 7),
+      reasons: why.slice(0, 7),
       risks: risks.slice(0, 5),
       plan: basePlan,
       requiresCatalyst: true
@@ -1414,9 +1565,12 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     .sort((a, b) => b.prepScore - a.prepScore)
 
   const recommendations = allItems.filter((x) => x.acceptable).slice(0, 5)
-  const preparation = allItems.slice(0, 5).map((x, i) => ({ ...x, rank: i + 1 }))
+  const preparation = allItems
+    .filter((x) => x.prepScore >= 40)
+    .slice(0, 5)
+    .map((x, i) => ({ ...x, rank: i + 1 }))
   const watchlist = allItems
-    .filter((x) => !x.acceptable)
+    .filter((x) => !x.acceptable && !preparation.some((p) => p.code === x.code))
     .slice(0, 8)
     .map((x, i) => ({ ...x, rank: i + 1 }))
 
