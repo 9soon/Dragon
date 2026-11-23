@@ -1,0 +1,16 @@
+node_modules/
+.cache/
+.qa/
+dist/.vite/
+
+# 本地运行日志与临时快照
+*.log
+/tmp*.json
+/e-*.json
+/e1.json
+/e3.json
+/.test_*.json
+
+# 系统文件
+.DS_Store
+Thumbs.db
