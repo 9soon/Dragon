@@ -1199,14 +1199,14 @@ onBeforeUnmount(() => {
 
 .edge-title-row h2 {
   margin: 0;
-  font-size: 21px;
+  font-size: 22px;
   font-weight: 720;
   letter-spacing: 0.04em;
 }
 
 .edge-desc {
   margin: 7px 0 0;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.75;
   color: var(--muted);
 }
@@ -1235,13 +1235,13 @@ onBeforeUnmount(() => {
 }
 
 .seg-btn b {
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.04em;
 }
 
 .seg-btn small {
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0.06em;
   color: var(--dim);
 }
@@ -1284,11 +1284,11 @@ onBeforeUnmount(() => {
   background: rgba(243, 199, 119, 0.06);
   color: var(--gold);
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .flow-step b {
-  font-size: 8.5px;
+  font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--muted);
@@ -1301,7 +1301,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 7px;
   margin-top: 11px;
-  font-size: 9.5px;
+  font-size: 11.5px;
   color: var(--dim);
 }
 
@@ -1325,7 +1325,7 @@ onBeforeUnmount(() => {
   border-radius: 9px;
   border: 1px dashed rgba(243, 199, 119, 0.2);
   background: rgba(243, 199, 119, 0.045);
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.6;
   color: #d6bd92;
 }
@@ -1381,18 +1381,18 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: 14.5px;
 }
 
 .stage-head b {
-  font-size: 14.5px;
+  font-size: 16px;
   font-weight: 650;
   letter-spacing: 0.04em;
 }
 
 .stage-clock {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -1400,7 +1400,7 @@ onBeforeUnmount(() => {
   position: relative;
   z-index: 1;
   margin: 8px 0 0;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.7;
   color: var(--muted);
 }
@@ -1448,12 +1448,12 @@ onBeforeUnmount(() => {
 }
 
 .tl-step b {
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 500;
 }
 
 .tl-step small {
-  font-size: 8.5px;
+  font-size: 10.5px;
   letter-spacing: 0.06em;
 }
 
@@ -1490,7 +1490,7 @@ onBeforeUnmount(() => {
   margin-top: 10px;
   padding-top: 9px;
   border-top: 1px dashed rgba(255, 255, 255, 0.07);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--dim);
 }
 
@@ -1519,7 +1519,7 @@ onBeforeUnmount(() => {
 .mini-stat b {
   display: block;
   font-family: var(--mono);
-  font-size: 15px;
+  font-size: 16.5px;
   font-weight: 600;
   line-height: 1.2;
   color: var(--text-soft);
@@ -1528,7 +1528,7 @@ onBeforeUnmount(() => {
 .mini-stat small {
   display: block;
   margin-top: 2px;
-  font-size: 8.5px;
+  font-size: 10.5px;
   letter-spacing: 0.03em;
   color: var(--dim);
 }
@@ -1542,7 +1542,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 9px 10px;
   border-radius: 10px;
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.65;
 }
 
@@ -1595,7 +1595,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -1648,8 +1648,8 @@ onBeforeUnmount(() => {
 
 .ac-rank {
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   margin-top: 2px;
   display: grid;
   place-items: center;
@@ -1657,7 +1657,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.03);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--dim);
 }
 
@@ -1673,20 +1673,20 @@ onBeforeUnmount(() => {
 }
 
 .ac-name b {
-  font-size: 15px;
+  font-size: 16.5px;
   font-weight: 650;
   letter-spacing: 0.02em;
 }
 
 .ac-name span {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--dim);
   letter-spacing: 0.06em;
 }
 
 .ac-sub {
   margin-top: 2px;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--muted);
   overflow: hidden;
@@ -1708,7 +1708,7 @@ onBeforeUnmount(() => {
 }
 
 .ac-ring small {
-  font-size: 7.5px;
+  font-size: 9.5px;
   letter-spacing: 0.08em;
   color: var(--dim);
 }
@@ -1736,7 +1736,7 @@ onBeforeUnmount(() => {
 
 .metric small {
   display: block;
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0.03em;
   color: var(--dim);
 }
@@ -1745,7 +1745,7 @@ onBeforeUnmount(() => {
   display: block;
   margin-top: 1px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13.5px;
   font-weight: 600;
   line-height: 1.25;
   color: var(--text-soft);
@@ -1757,7 +1757,7 @@ onBeforeUnmount(() => {
 .metric > span {
   display: block;
   margin-top: 1px;
-  font-size: 7.5px;
+  font-size: 9.5px;
   color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
@@ -1772,7 +1772,7 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 5px;
   margin: 0 0 3px;
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.6;
   color: var(--text-soft);
 }
@@ -1796,7 +1796,7 @@ onBeforeUnmount(() => {
 
 .ac-risks p {
   margin: 0 0 2px;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.55;
   color: #d7a3a7;
 }
@@ -1816,14 +1816,14 @@ onBeforeUnmount(() => {
 .prep-box b {
   display: block;
   margin-bottom: 4px;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.06em;
   color: var(--gold);
 }
 
 .prep-box p {
   margin: 0 0 2px;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.55;
   color: #c9b48e;
 }
@@ -1856,19 +1856,19 @@ onBeforeUnmount(() => {
 }
 
 .ev-main b {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-soft);
 }
 
 .ev-main span {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11.5px;
   color: var(--gold);
 }
 
 .ev-main small {
   width: 100%;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--dim);
 }
 
@@ -1876,12 +1876,12 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   font-style: normal;
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10.5px;
 }
 
 .evidence-empty {
   margin: 4px 0 0;
-  font-size: 8.5px;
+  font-size: 10.5px;
   line-height: 1.6;
 }
 
@@ -1893,7 +1893,7 @@ onBeforeUnmount(() => {
 }
 
 .link-btn {
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--gold);
   border-bottom: 1px dashed rgba(243, 199, 119, 0.28);
@@ -1910,7 +1910,7 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   border: 1px solid rgba(255, 180, 94, 0.16);
   background: rgba(255, 180, 94, 0.045);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.6;
   color: #d4b28c;
 }
@@ -1963,7 +1963,7 @@ onBeforeUnmount(() => {
 
 .mode-head h3 {
   margin: 3px 0 0;
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 720;
   letter-spacing: 0.03em;
 }
@@ -1976,7 +1976,7 @@ onBeforeUnmount(() => {
 
 .mode-reason {
   margin: 8px 0 0;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.7;
   color: var(--muted);
 }
@@ -2001,7 +2001,7 @@ onBeforeUnmount(() => {
 .mode-stats b {
   display: block;
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: 15.5px;
   font-weight: 600;
   color: var(--text-soft);
 }
@@ -2009,7 +2009,7 @@ onBeforeUnmount(() => {
 .mode-stats small {
   display: block;
   margin-top: 1px;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--dim);
 }
 
@@ -2025,7 +2025,7 @@ onBeforeUnmount(() => {
 .mode-foot p {
   margin: 0;
   flex: 1;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--dim);
 }
@@ -2039,7 +2039,7 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   border: 1px solid rgba(243, 199, 119, 0.16);
   background: rgba(243, 199, 119, 0.04);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
   cursor: pointer;
 }
@@ -2049,7 +2049,7 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   border: 1px solid var(--gold-line);
   color: var(--gold);
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0.08em;
 }
 
@@ -2103,19 +2103,19 @@ onBeforeUnmount(() => {
 }
 
 .on-name b {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 650;
 }
 
 .on-name span {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--dim);
   letter-spacing: 0.05em;
 }
 
 .on-sub {
   margin-top: 2px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -2128,7 +2128,7 @@ onBeforeUnmount(() => {
 }
 
 .on-ring small {
-  font-size: 7.5px;
+  font-size: 9.5px;
   color: var(--dim);
   letter-spacing: 0.07em;
 }
@@ -2155,14 +2155,14 @@ onBeforeUnmount(() => {
 
 .price-band small {
   display: block;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--dim);
 }
 
 .price-band b {
   display: block;
   margin-top: 1px;
-  font-size: 12px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--text-soft);
   white-space: nowrap;
@@ -2185,13 +2185,13 @@ onBeforeUnmount(() => {
 .gap-zone b {
   display: block;
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 600;
 }
 
 .gap-zone small {
   display: block;
-  font-size: 7.5px;
+  font-size: 9.5px;
   color: var(--dim);
 }
 
@@ -2219,7 +2219,7 @@ onBeforeUnmount(() => {
 
 .plan-block h5 {
   margin: 9px 0 4px;
-  font-size: 8.5px;
+  font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--gold);
@@ -2229,7 +2229,7 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 5px;
   margin: 0 0 3px;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--text-soft);
 }
@@ -2253,7 +2253,7 @@ onBeforeUnmount(() => {
 .plan-stop b {
   display: block;
   margin-bottom: 3px;
-  font-size: 8.5px;
+  font-size: 10.5px;
   letter-spacing: 0.06em;
   color: #d99aa0;
 }
@@ -2268,7 +2268,7 @@ onBeforeUnmount(() => {
   margin-top: 9px;
   padding: 7px 8px;
   border-radius: 8px;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.6;
 }
 
@@ -2302,7 +2302,7 @@ onBeforeUnmount(() => {
 }
 
 .on-detail summary {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
   cursor: pointer;
   outline: none;
@@ -2310,7 +2310,7 @@ onBeforeUnmount(() => {
 
 .on-detail p {
   margin: 6px 0 0;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.65;
 }
 
@@ -2341,19 +2341,19 @@ onBeforeUnmount(() => {
 
 .watch-main b {
   display: block;
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 600;
 }
 
 .watch-main small {
   display: block;
   margin-top: 1px;
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
 }
 
 .watch-score {
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--text-soft);
 }
 
@@ -2364,7 +2364,7 @@ onBeforeUnmount(() => {
 .missing-text {
   flex: 0 0 46%;
   text-align: right;
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.5;
   color: #b58e91;
 }
@@ -2377,7 +2377,7 @@ onBeforeUnmount(() => {
 .rule-panel h4,
 .note-panel h4 {
   margin: 0 0 8px;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--gold);
@@ -2400,20 +2400,20 @@ onBeforeUnmount(() => {
   width: 20px;
   padding-top: 1px;
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: 10px;
   color: rgba(243, 199, 119, 0.65);
 }
 
 .rule-line p {
   margin: 0;
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.65;
   color: var(--muted);
 }
 
 .note-panel p {
   margin: 0 0 5px;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.7;
   color: var(--muted);
 }
@@ -2435,14 +2435,14 @@ onBeforeUnmount(() => {
 
 .profile-hero h2 {
   margin: 3px 0 0;
-  font-size: 21px;
+  font-size: 22px;
   font-weight: 720;
   letter-spacing: 0.04em;
 }
 
 .profile-hero p {
   margin: 7px 0 0;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.75;
   color: var(--muted);
 }
@@ -2455,7 +2455,7 @@ onBeforeUnmount(() => {
 }
 
 .hero-actions .dim {
-  font-size: 8.5px;
+  font-size: 10.5px;
 }
 
 .stat-grid {
@@ -2477,7 +2477,7 @@ onBeforeUnmount(() => {
 .stat-cell b {
   display: block;
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 650;
   line-height: 1.2;
   color: var(--text-soft);
@@ -2486,7 +2486,7 @@ onBeforeUnmount(() => {
 .stat-cell small {
   display: block;
   margin-top: 2px;
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.4;
   color: var(--dim);
 }
@@ -2496,7 +2496,7 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
 }
 
@@ -2517,21 +2517,21 @@ onBeforeUnmount(() => {
 }
 
 .pr-top b {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-soft);
 }
 
 .pr-top span {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11.5px;
   color: var(--gold);
 }
 
 .profile-rule small {
   display: block;
   margin-top: 1px;
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
 }
 
@@ -2553,7 +2553,7 @@ onBeforeUnmount(() => {
 
 .bucket-head b {
   display: block;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-soft);
 }
@@ -2561,32 +2561,32 @@ onBeforeUnmount(() => {
 .bucket-head small {
   display: block;
   margin-top: 1px;
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
 }
 
 .bucket-head > span {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--gold);
 }
 
 .bucket-row {
   display: grid;
-  grid-template-columns: 74px 1fr 44px;
+  grid-template-columns: 82px 1fr 50px;
   align-items: center;
   gap: 7px;
   padding: 4px 0;
 }
 
 .bucket-name {
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--muted);
   line-height: 1.3;
 }
 
 .bucket-name small {
   display: block;
-  font-size: 7.5px;
+  font-size: 9.5px;
   color: var(--dim);
 }
 
@@ -2616,14 +2616,14 @@ onBeforeUnmount(() => {
 .bucket-rate b {
   display: block;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-soft);
 }
 
 .bucket-rate small {
   display: block;
-  font-size: 7px;
+  font-size: 9px;
   color: var(--dim);
 }
 
@@ -2635,7 +2635,7 @@ onBeforeUnmount(() => {
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px dashed rgba(255, 255, 255, 0.05);
-  font-size: 7.5px;
+  font-size: 9.5px;
   line-height: 1.6;
   color: var(--dim);
 }
@@ -2653,14 +2653,14 @@ onBeforeUnmount(() => {
 .recent-head,
 .recent-row {
   display: grid;
-  grid-template-columns: 36px 1fr auto 54px 48px;
+  grid-template-columns: 38px 1fr auto 60px 52px;
   align-items: center;
   gap: 6px;
 }
 
 .recent-head {
   padding: 7px 0 5px;
-  font-size: 7.5px;
+  font-size: 9.5px;
   letter-spacing: 0.05em;
   color: var(--dim);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -2681,7 +2681,7 @@ onBeforeUnmount(() => {
 }
 
 .recent-row .date {
-  font-size: 8px;
+  font-size: 10px;
   color: var(--dim);
 }
 
@@ -2691,7 +2691,7 @@ onBeforeUnmount(() => {
 
 .recent-row .who b {
   display: block;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -2700,7 +2700,7 @@ onBeforeUnmount(() => {
 
 .recent-row .who small {
   display: block;
-  font-size: 7.5px;
+  font-size: 9.5px;
   color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
@@ -2712,13 +2712,13 @@ onBeforeUnmount(() => {
 }
 
 .recent-row .res {
-  font-size: 8px;
+  font-size: 10px;
   text-align: right;
   white-space: nowrap;
 }
 
 .recent-row .gap {
-  font-size: 8.5px;
+  font-size: 10.5px;
   text-align: right;
 }
 
@@ -2728,7 +2728,7 @@ onBeforeUnmount(() => {
   }
 
   .edge-title-row h2 {
-    font-size: 19px;
+    font-size: 20px;
   }
 
   .metric-grid,
@@ -2737,12 +2737,12 @@ onBeforeUnmount(() => {
   }
 
   .bucket-row {
-    grid-template-columns: 64px 1fr 40px;
+    grid-template-columns: 72px 1fr 46px;
   }
 
   .recent-head,
   .recent-row {
-    grid-template-columns: 32px 1fr auto 50px 44px;
+    grid-template-columns: 34px 1fr auto 56px 48px;
     gap: 4px;
   }
 

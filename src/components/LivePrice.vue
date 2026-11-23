@@ -42,14 +42,14 @@ onBeforeUnmount(() => clearTimeout(timer))
 
 <style scoped>
 .live-price--lg .live-price__val {
-  font-size: 30px;
+  font-size: 32px;
 }
 
 .live-price--sm .live-price__val {
-  font-size: 17px;
+  font-size: 18px;
 }
 
 .live-price--sm .live-price__pct {
-  font-size: 10.5px;
+  font-size: 12px;
 }
 </style>

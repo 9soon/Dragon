@@ -362,7 +362,7 @@ onBeforeUnmount(() => {
   background: var(--gold-soft);
   color: var(--gold);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0;
 }
 
@@ -374,14 +374,14 @@ onBeforeUnmount(() => {
 }
 
 .index-title b {
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 650;
   letter-spacing: 0.04em;
 }
 
 .index-code {
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
   letter-spacing: 0.06em;
 }
@@ -392,7 +392,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 5px;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -430,7 +430,7 @@ onBeforeUnmount(() => {
 }
 
 .index-price {
-  font-size: 32px;
+  font-size: 34px;
   font-weight: 600;
   line-height: 1.05;
   letter-spacing: -0.015em;
@@ -441,7 +441,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: baseline;
   gap: 7px;
-  font-size: 12px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
@@ -453,7 +453,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.03);
   color: var(--dim);
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0.08em;
 }
 
@@ -466,13 +466,13 @@ onBeforeUnmount(() => {
   align-items: baseline;
   justify-content: space-between;
   margin-bottom: 1px;
-  font-size: 8.5px;
+  font-size: 10.5px;
   letter-spacing: 0.05em;
   color: var(--dim);
 }
 
 .index-chart-head .mono {
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--muted);
 }
 
@@ -485,7 +485,7 @@ onBeforeUnmount(() => {
   border: 1px dashed rgba(255, 255, 255, 0.07);
   background: rgba(255, 255, 255, 0.015);
   color: var(--dim);
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.04em;
 }
 
@@ -495,10 +495,10 @@ onBeforeUnmount(() => {
 
 .index-chart-axis {
   position: relative;
-  height: 10px;
+  height: 12px;
   margin-top: 1px;
   font-family: var(--mono);
-  font-size: 7.5px;
+  font-size: 9.5px;
   line-height: 1.1;
   color: var(--dim);
   font-variant-numeric: tabular-nums;
@@ -531,13 +531,14 @@ onBeforeUnmount(() => {
 .index-metric {
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 4px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
 }
 
 .index-metric small {
   flex: 0 0 auto;
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
   letter-spacing: 0.04em;
 }
@@ -545,7 +546,7 @@ onBeforeUnmount(() => {
 .index-metric b {
   min-width: 0;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 550;
   color: var(--text-soft);
   font-variant-numeric: tabular-nums;
@@ -554,7 +555,7 @@ onBeforeUnmount(() => {
 
 .index-cmp {
   margin-top: 5px;
-  font-size: 9px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -574,14 +575,14 @@ onBeforeUnmount(() => {
 
 .index-cmp b {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-soft);
 }
 
 .index-cmp-delta {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--muted);
   white-space: nowrap;
@@ -589,7 +590,7 @@ onBeforeUnmount(() => {
 
 .index-cmp-pct {
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
   white-space: nowrap;
 }
@@ -597,7 +598,7 @@ onBeforeUnmount(() => {
 .index-cmp-sub {
   margin-top: 1px;
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
@@ -614,7 +615,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   margin-top: 6px;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -629,7 +630,7 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 3px;
   font-family: var(--font);
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.5;
   color: var(--dim);
 }

@@ -328,14 +328,14 @@ function tierTone(v) {
 
 .review-title-row h2 {
   margin: 0;
-  font-size: 22px;
+  font-size: 23px;
   font-weight: 700;
   letter-spacing: 0.03em;
 }
 
 .review-desc {
   margin: 7px 0 0;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.75;
   color: var(--muted);
 }

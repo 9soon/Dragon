@@ -240,15 +240,15 @@ const rankedThemes = computed(() =>
 
 .more-rank {
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   border-radius: 6px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.03);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -261,7 +261,7 @@ const rankedThemes = computed(() =>
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 13.5px;
   line-height: 1.4;
 }
 
@@ -272,7 +272,7 @@ const rankedThemes = computed(() =>
 
 .more-meta {
   margin-top: 2px;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--dim);
 }
@@ -286,26 +286,26 @@ const rankedThemes = computed(() =>
 }
 
 .more-heat b {
-  font-size: 13px;
+  font-size: 14.5px;
   font-weight: 600;
   color: var(--text-soft);
 }
 
 .more-heat small {
-  font-size: 7.5px;
+  font-size: 9.5px;
   letter-spacing: 0.1em;
   color: var(--dim);
 }
 
 .more-toggle {
   width: 100%;
-  height: 29px;
+  height: 31px;
   margin-top: 8px;
   border-radius: 8px;
   border: 1px dashed rgba(255, 255, 255, 0.11);
   background: rgba(255, 255, 255, 0.02);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.05em;
   cursor: pointer;
   transition: 0.2s ease;
@@ -348,12 +348,12 @@ const rankedThemes = computed(() =>
 }
 
 .fading-name b {
-  font-size: 12px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
 .fading-name span {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .fading-count {
@@ -361,11 +361,11 @@ const rankedThemes = computed(() =>
   align-items: baseline;
   gap: 3px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13.5px;
 }
 
 .fading-count small {
-  font-size: 8px;
+  font-size: 10px;
   color: var(--dim);
 }
 
@@ -392,18 +392,18 @@ const rankedThemes = computed(() =>
   background: var(--gold-soft);
   color: var(--gold);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .criterion b {
-  font-size: 12px;
+  font-size: 13.5px;
   font-weight: 600;
   letter-spacing: 0.03em;
 }
 
 .criterion p {
   margin: 2px 0 0;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.7;
   color: var(--muted);
 }
@@ -411,7 +411,7 @@ const rankedThemes = computed(() =>
 .criteria-foot {
   padding-top: 9px;
   border-top: 1px dashed rgba(255, 255, 255, 0.07);
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.6;
   color: var(--dim);
 }

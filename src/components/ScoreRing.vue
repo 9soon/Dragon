@@ -81,21 +81,21 @@ const color = computed(() => {
 
 .score-ring__inner b {
   font-family: var(--mono);
-  font-size: 15px;
+  font-size: 16.5px;
   font-weight: 650;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
 .score-ring__inner small {
-  font-size: 7px;
+  font-size: 9px;
   color: var(--dim);
 }
 
 .score-ring__caption {
   position: absolute;
   bottom: -12px;
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0.08em;
   color: var(--dim);
   white-space: nowrap;

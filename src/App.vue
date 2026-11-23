@@ -291,7 +291,7 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 111, 97, 0.32);
   background: rgba(255, 111, 97, 0.08);
   color: #ffc9c1;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.65;
 }
 
@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 111, 97, 0.4);
   color: #ff9d90;
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .stale-txt {

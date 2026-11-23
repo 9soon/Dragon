@@ -675,7 +675,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
   margin-top: 13px;
   padding-top: 10px;
   border-top: 1px dashed rgba(243, 199, 119, 0.18);
-  font-size: 9.5px;
+  font-size: 11.5px;
   letter-spacing: 0.08em;
   color: rgba(243, 199, 119, 0.6);
 }
@@ -695,11 +695,11 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .gate-mirror b {
-  font-size: 13px;
+  font-size: 14.5px;
   font-weight: 650;
   color: var(--text-soft);
 }
@@ -719,7 +719,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 .check-map {
   margin-top: 7px;
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10.5px;
   letter-spacing: 0.02em;
   color: var(--dim);
   word-break: break-all;
@@ -740,14 +740,14 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 .discipline b {
   display: block;
   font-family: "STKaiti", "KaiTi", serif;
-  font-size: 13px;
+  font-size: 14.5px;
   letter-spacing: 0.08em;
   color: #e8d3a8;
 }
 
 .discipline p {
   margin: 3px 0 0;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.7;
   color: var(--muted);
 }
@@ -756,7 +756,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
   margin: 8px 0 0;
   padding-top: 8px;
   border-top: 1px dashed rgba(255, 255, 255, 0.07);
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.75;
   color: var(--dim);
 }
@@ -770,7 +770,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 .nos-list div {
   position: relative;
   padding-left: 15px;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.65;
   color: var(--muted);
 }
@@ -781,7 +781,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
   left: 0;
   top: 0;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
   color: rgba(255, 84, 96, 0.6);
 }
 
@@ -815,7 +815,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
   border-radius: 999px;
   border: 1px solid rgba(243, 199, 119, 0.28);
   background: rgba(243, 199, 119, 0.08);
-  font-size: 8.5px;
+  font-size: 10.5px;
   letter-spacing: 0.12em;
   color: var(--gold);
 }
@@ -833,14 +833,14 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 }
 
 .wf-group-id b {
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 500;
   color: var(--text-soft);
 }
 
 .wf-group-head p {
   margin: 5px 0 0;
-  font-size: 9.3px;
+  font-size: 11.3px;
   line-height: 1.6;
   color: var(--dim);
 }
@@ -894,20 +894,20 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 }
 
 .wf-title b {
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 650;
   color: var(--text-soft);
 }
 
 .wf-title span {
   flex: none;
-  font-size: 8.3px;
+  font-size: 10.3px;
   color: var(--dim);
 }
 
 .wf-body > p {
   margin: 4px 0 0;
-  font-size: 9.6px;
+  font-size: 11.6px;
   line-height: 1.68;
   color: var(--muted);
 }
@@ -924,7 +924,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
 .wf-out,
 .wf-veto {
-  font-size: 8.6px;
+  font-size: 10.6px;
   line-height: 1.55;
 }
 
@@ -955,17 +955,17 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 }
 
 .stage-cell b {
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-soft);
 }
 
 .stage-cell span {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 
 .stage-cell small {
-  font-size: 7.8px;
+  font-size: 9.8px;
   color: var(--dim);
 }
 
@@ -997,13 +997,13 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 .honesty-box b {
   display: block;
   margin-bottom: 4px;
-  font-size: 10.5px;
+  font-size: 12px;
   color: #f3c777;
 }
 
 .honesty-box p {
   margin: 0;
-  font-size: 9.4px;
+  font-size: 11.4px;
   line-height: 1.72;
   color: var(--muted);
 }
@@ -1033,11 +1033,11 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 }
 
 .ps-zone b {
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .ps-zone small {
-  font-size: 7.8px;
+  font-size: 9.8px;
   color: var(--dim);
 }
 
@@ -1074,12 +1074,12 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 }
 
 .plan-spec-grid small {
-  font-size: 7.8px;
+  font-size: 9.8px;
   color: var(--dim);
 }
 
 .plan-spec-grid b {
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--text-soft);
 }
 
@@ -1099,20 +1099,20 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
 .profile-dim small {
   display: block;
-  font-size: 8.4px;
+  font-size: 10.4px;
   color: var(--dim);
 }
 
 .profile-dim b {
   display: block;
   margin-top: 2px;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--gold);
 }
 
 .profile-dim p {
   margin: 3px 0 0;
-  font-size: 8.7px;
+  font-size: 10.7px;
   line-height: 1.55;
   color: var(--muted);
 }
@@ -1120,27 +1120,27 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 .method-panel h4,
 .verify-panel h4 {
   margin: 0 0 6px;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 650;
   color: var(--text-soft);
 }
 
 .method-line {
   display: grid;
-  grid-template-columns: 20px 1fr;
+  grid-template-columns: 22px 1fr;
   gap: 6px;
   margin-top: 7px;
 }
 
 .method-line span {
   padding-top: 1px;
-  font-size: 8.3px;
+  font-size: 10.3px;
   color: rgba(243, 199, 119, 0.58);
 }
 
 .method-line p {
   margin: 0;
-  font-size: 9.4px;
+  font-size: 11.4px;
   line-height: 1.68;
   color: var(--muted);
 }
@@ -1165,19 +1165,19 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
 .accuracy-card > span {
   padding-top: 1px;
-  font-size: 8.3px;
+  font-size: 10.3px;
   color: rgba(243, 199, 119, 0.58);
 }
 
 .accuracy-card b {
-  font-size: 10.2px;
+  font-size: 12.2px;
   font-weight: 650;
   color: var(--text-soft);
 }
 
 .accuracy-card p {
   margin: 4px 0 0;
-  font-size: 9.2px;
+  font-size: 11.2px;
   line-height: 1.65;
   color: var(--muted);
 }
@@ -1190,7 +1190,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
 .verify-panel p {
   margin: 8px 0 0;
-  font-size: 9.2px;
+  font-size: 11.2px;
   line-height: 1.65;
   color: var(--dim);
 }

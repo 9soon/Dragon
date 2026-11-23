@@ -224,7 +224,7 @@ const subtitle = computed(() => {
 <style scoped>
 .role-explain {
   margin: 0;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.8;
   color: var(--text-soft);
   padding: 11px;
@@ -234,13 +234,13 @@ const subtitle = computed(() => {
 }
 
 .small-note {
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.7;
 }
 
 .seal-note {
   margin: 8px 0 0;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.65;
 }
 
@@ -251,7 +251,7 @@ const subtitle = computed(() => {
   border-radius: 0 7px 7px 0;
   background: rgba(243, 199, 119, 0.05);
   font-family: "STKaiti", "KaiTi", serif;
-  font-size: 11.5px;
+  font-size: 13px;
   letter-spacing: 0.08em;
   line-height: 1.7;
   color: #e8d3a8;

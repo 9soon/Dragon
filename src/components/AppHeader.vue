@@ -63,7 +63,6 @@ const metaLabel = computed(() => {
           <i class="dot" :class="live ? 'dot--live' : 'dot--gold'"></i>
           {{ market ? (live ? market.label : market.snapshotLabel || market.label) : '接入中' }}
         </span>
-        <span class="clock">{{ clock }}</span>
         <button
           class="icon-btn"
           :class="{ 'is-spinning': refreshing }"
@@ -89,6 +88,7 @@ const metaLabel = computed(() => {
       <span>价格 1s · 榜单 10s</span>
       <span v-if="dashboard && dashboard.cacheAge != null" class="sep"></span>
       <span v-if="dashboard && dashboard.cacheAge != null">缓存 {{ dashboard.cacheAge }}s</span>
+      <span class="clock mono">{{ clock }}</span>
     </div>
   </header>
 </template>

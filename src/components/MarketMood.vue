@@ -95,14 +95,14 @@ const premiumClass = computed(() => {
 }
 
 .unit {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--dim);
   margin-left: 1px;
 }
 
 .breakdown-row em {
   font-style: normal;
-  font-size: 8px;
+  font-size: 10px;
   margin-left: 2px;
 }
 </style>

@@ -133,7 +133,7 @@ function openVerify() {
       >
         <span class="check-ico">{{ check.pass ? (check.proxy ? '≈' : '✓') : '✕' }}</span>
         <b>{{ check.label }}</b>
-        <span v-if="check.proxy" class="chip chip--gold" style="height: 15px; font-size: 8px; padding: 0 4px">近似</span>
+        <span v-if="check.proxy" class="chip chip--gold" style="height: 15px; font-size: 10px; padding: 0 4px">近似</span>
         <span class="detail">{{ check.detail }}</span>
       </div>
     </div>
@@ -225,7 +225,7 @@ function openVerify() {
   border: 1px solid rgba(255, 255, 255, 0.09);
   background: rgba(255, 255, 255, 0.03);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -239,7 +239,7 @@ function openVerify() {
   margin-top: 8px;
   padding-top: 7px;
   border-top: 1px dashed rgba(255, 255, 255, 0.06);
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.03em;
   color: var(--dim);
 }
@@ -254,7 +254,7 @@ function openVerify() {
   border-radius: 7px;
   border: 1px solid rgba(255, 84, 96, 0.22);
   background: rgba(255, 84, 96, 0.06);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
   color: #e0a0a4;
 }
@@ -263,7 +263,7 @@ function openVerify() {
   margin-top: 4px;
   padding: 6px 4px 2px;
   border-top: 1px dashed rgba(255, 255, 255, 0.05);
-  font-size: 8.5px;
+  font-size: 10.5px;
   line-height: 1.5;
 }
 </style>

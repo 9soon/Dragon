@@ -113,6 +113,6 @@ function clear() {
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
-  font-size: 10px;
+  font-size: 12px;
 }
 </style>

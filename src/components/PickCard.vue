@@ -183,13 +183,13 @@ const footHint = computed(() => {
   border-radius: 8px;
   border: 1px solid rgba(255, 84, 96, 0.2);
   background: rgba(255, 84, 96, 0.055);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 
 .pick-seal b {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--up);
   font-variant-numeric: tabular-nums;
@@ -212,7 +212,7 @@ const footHint = computed(() => {
 .pick-seal-meta {
   margin-left: auto;
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
   white-space: nowrap;
 }

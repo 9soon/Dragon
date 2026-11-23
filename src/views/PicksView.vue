@@ -143,7 +143,7 @@ const gateEmpty = computed(() => props.dashboard.gate && props.dashboard.gate.ke
 
 .pick-head-top h2 {
   margin: 3px 0 0;
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 700;
   letter-spacing: 0.04em;
 }
@@ -154,7 +154,7 @@ const gateEmpty = computed(() => props.dashboard.gate && props.dashboard.gate.ke
   flex-direction: column;
   align-items: flex-end;
   gap: 2px;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .live-line {
@@ -167,7 +167,7 @@ const gateEmpty = computed(() => props.dashboard.gate && props.dashboard.gate.ke
 
 .pick-head-desc {
   margin: 9px 0 0;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.7;
   color: var(--muted);
 }
@@ -181,7 +181,7 @@ const gateEmpty = computed(() => props.dashboard.gate && props.dashboard.gate.ke
   border-radius: 9px;
   border: 1px dashed rgba(255, 84, 96, 0.24);
   background: rgba(255, 84, 96, 0.05);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.6;
   color: #d9a0a4;
 }
@@ -206,7 +206,7 @@ const gateEmpty = computed(() => props.dashboard.gate && props.dashboard.gate.ke
   border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(255, 255, 255, 0.025);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--muted);
 }
@@ -233,20 +233,20 @@ const gateEmpty = computed(() => props.dashboard.gate && props.dashboard.gate.ke
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 28px;
-  padding: 0 10px;
+  height: 30px;
+  padding: 0 11px;
   border-radius: 8px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.025);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   letter-spacing: 0.04em;
   transition: 0.18s ease;
 }
 
 .filter-chip span {
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 10.5px;
   color: var(--dim);
 }
 
@@ -262,7 +262,7 @@ const gateEmpty = computed(() => props.dashboard.gate && props.dashboard.gate.ke
 
 .scoring-note h4 {
   margin: 0 0 7px;
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--gold);
@@ -270,7 +270,7 @@ const gateEmpty = computed(() => props.dashboard.gate && props.dashboard.gate.ke
 
 .scoring-note p {
   margin: 0 0 6px;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.75;
   color: var(--muted);
 }
