@@ -769,6 +769,8 @@ function buildLadder(pool) {
     .sort((a, b) => b[0] - a[0])
     .map(([lbc, list]) => ({
       lbc,
+      /* 7 层以上合并展示时必须标 +，否则 8 板会被误读成 7 板 */
+      capped: list.some((s) => s.lbc > 7),
       count: list.length,
       stocks: list
         .slice()
@@ -784,7 +786,112 @@ function buildLadder(pool) {
     }))
 }
 
-function buildReview({ sentiment, pool, blowPool, downPool, sectors, prevPool }) {
+/**
+ * 昨日连板天梯的今日去向。
+ * 晋级 = 今日仍在涨停池且高度提升；淘汰 = 今日不在涨停池；
+ * 炸板 / 跌停 / 未封 只是当前快照状态，盘中回封会自动回到天梯。
+ */
+function buildLadderFlow(prevPool = [], pool = [], blowPool = [], downPool = [], quotesByCode = new Map()) {
+  const todayMap = new Map((pool || []).map((s) => [s.code, s]))
+  const blowSet = new Set((blowPool || []).map((s) => s.code))
+  const downSet = new Set((downPool || []).map((s) => s.code))
+  const buckets = new Map()
+  const eliminatedStocks = []
+  let promoted = 0
+  let retained = 0
+  let blown = 0
+
+  for (const s of prevPool || []) {
+    const today = todayMap.get(s.code)
+    const advanced = !!(today && today.lbc > s.lbc)
+    const stillSealed = !!(today && !advanced)
+    const key = Math.min(s.lbc, 7)
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        lbc: key,
+        total: 0,
+        promoted: 0,
+        retained: 0,
+        eliminated: 0,
+        blown: 0,
+        capped: false
+      })
+    }
+    const bucket = buckets.get(key)
+    if (s.lbc > 7) bucket.capped = true
+    bucket.total++
+    if (advanced) {
+      bucket.promoted++
+      promoted++
+      continue
+    }
+    if (stillSealed) {
+      /* 仍在涨停池但高度没有提升，属于数据异常，不算晋级也不算淘汰 */
+      bucket.retained++
+      retained++
+      continue
+    }
+    bucket.eliminated++
+    const isBlown = blowSet.has(s.code)
+    if (isBlown) {
+      bucket.blown++
+      blown++
+    }
+    if (s.lbc < 2) continue
+    const q = quotesByCode ? quotesByCode.get(s.code) : null
+    let status = 'unsealed'
+    let statusLabel = '未封'
+    if (isBlown) {
+      status = 'blown'
+      statusLabel = '炸板'
+    } else if (downSet.has(s.code)) {
+      status = 'limitDown'
+      statusLabel = '跌停'
+    } else if (!q || q.pct == null) {
+      status = 'noQuote'
+      statusLabel = '待报价'
+    }
+    eliminatedStocks.push({
+      code: s.code,
+      name: s.name,
+      sector: s.sector,
+      secid: s.secid,
+      lbc: s.lbc,
+      pct: q && q.pct != null ? round(q.pct, 2) : null,
+      status,
+      statusLabel
+    })
+  }
+
+  const rows = Array.from(buckets.values())
+    .sort((a, b) => b.lbc - a.lbc)
+    .map((row) => ({
+      ...row,
+      label: row.lbc === 1 ? '首板' : `${row.lbc}板${row.capped ? '+' : ''}`,
+      rate: row.total ? round((row.promoted / row.total) * 100, 0) : null
+    }))
+
+  eliminatedStocks.sort(
+    (a, b) =>
+      b.lbc - a.lbc ||
+      (b.pct == null ? -999 : b.pct) - (a.pct == null ? -999 : a.pct) ||
+      a.name.localeCompare(b.name, 'zh')
+  )
+
+  return {
+    prevReady: (prevPool || []).length > 0,
+    total: (prevPool || []).length,
+    promoted,
+    retained,
+    eliminated: Math.max(0, (prevPool || []).length - promoted - retained),
+    blown,
+    rows,
+    stocks: eliminatedStocks
+  }
+}
+
+function buildReview({ sentiment, pool, blowPool, downPool, sectors, prevPool, quotesByCode }) {
+  const quoteMap = quotesByCode || new Map()
   const blownTop = blowPool
     .slice()
     .sort((a, b) => b.ztCount - a.ztCount || b.blowCount - a.blowCount)
@@ -819,6 +926,7 @@ function buildReview({ sentiment, pool, blowPool, downPool, sectors, prevPool })
     }))
   return {
     ladder: buildLadder(pool),
+    ladderFlow: buildLadderFlow(prevPool, pool, blowPool, downPool, quoteMap),
     blownTop,
     downTop,
     distribution,
@@ -841,6 +949,7 @@ module.exports = {
   buildPicks,
   buildReview,
   buildLadder,
+  buildLadderFlow,
   matchBoard,
   sealTimeLabel,
   sealMinutesFromOpen,

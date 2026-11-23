@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import MarketMood from '../components/MarketMood.vue'
 import { fmtMoney, fmtPct } from '../lib/format'
 
@@ -12,14 +12,43 @@ const sentiment = computed(() => props.dashboard.sentiment)
 const tiers = computed(() => (review.value.prevPremium && review.value.prevPremium.byTier) || [])
 const promotion = computed(() => review.value.promotion || sentiment.value.promotion || {})
 const ladder = computed(() => review.value.ladder || [])
+const ladderFlow = computed(() => review.value.ladderFlow || {})
+const flowRows = computed(() => ladderFlow.value.rows || [])
+const flowReady = computed(() => !!ladderFlow.value.prevReady)
+const eliminated = computed(() => ladderFlow.value.stocks || [])
+const firstTierEliminated = computed(() => {
+  const row = flowRows.value.find((x) => x.lbc === 1)
+  return row ? row.eliminated : 0
+})
+const showAllElim = ref(false)
+const eliminatedShown = computed(() =>
+  showAllElim.value ? eliminated.value : eliminated.value.slice(0, 6)
+)
 const distribution = computed(() => review.value.distribution || [])
 const maxDist = computed(() => Math.max(1, ...distribution.value.map((x) => x.todayCount)))
 const blown = computed(() => review.value.blownTop || [])
 const down = computed(() => review.value.downTop || [])
 const live = computed(() => props.dashboard.dataMode === 'live')
+const snapshotLabel = computed(() => {
+  const d = props.dashboard
+  const m = d.market || {}
+  if (d.dataMode === 'live') return '盘中实时'
+  if (!d.isTodayData) {
+    return ['preopen', 'auction', 'waiting'].includes(m.key) ? '盘前快照' : '最近交易日'
+  }
+  if (m.key === 'lunch') return '午间快照'
+  return '收盘快照'
+})
 
 const promotionOverall = computed(() => promotion.value.overall || {})
 const premium = computed(() => sentiment.value.premium || {})
+
+function elimChip(item) {
+  if (item.status === 'blown') return 'chip--red'
+  if (item.status === 'limitDown') return 'chip--green'
+  if (item.status === 'noQuote') return 'chip--dim'
+  return 'chip--warn'
+}
 
 const conclusion = computed(() => {
   const s = sentiment.value
@@ -121,10 +150,23 @@ function tierTone(v) {
         <span class="section-title">连板天梯</span>
         <span class="section-count">{{ ladder.length }} 个高度层</span>
       </header>
+
+      <div class="ladder-livebar">
+        <span class="ladder-live" :class="live ? 'is-live' : 'is-snapshot'">
+          <i></i>{{ snapshotLabel }}
+        </span>
+        <template v-if="flowReady">
+          <span class="ladder-stat"><small>晋级</small><b class="is-up">{{ ladderFlow.promoted }}</b></span>
+          <span class="ladder-stat"><small>淘汰</small><b class="is-down">{{ ladderFlow.eliminated }}</b></span>
+          <span v-if="ladderFlow.blown" class="ladder-stat"><small>炸板</small><b>{{ ladderFlow.blown }}</b></span>
+        </template>
+        <span v-else class="ladder-hint">昨日池未就绪</span>
+      </div>
+
       <div v-if="ladder.length" class="panel ladder-board">
         <div v-for="row in ladder" :key="row.lbc" class="ladder-row">
           <div class="ladder-level">
-            <b>{{ row.lbc === 1 ? '首' : row.lbc }}</b>
+            <b>{{ row.lbc === 1 ? '首' : row.lbc }}{{ row.lbc !== 1 && row.capped ? '+' : '' }}</b>
             <small>{{ row.lbc === 1 ? '板' : '连板' }} · {{ row.count }}</small>
           </div>
           <div class="ladder-stocks">
@@ -136,6 +178,78 @@ function tierTone(v) {
         </div>
       </div>
       <div v-else class="empty-mini panel panel-pad">今日暂无涨停天梯数据。</div>
+      <p class="section-note">
+        高度层随涨停池约 10 秒刷新；7 层以上合并展示并标 +。晋级 / 淘汰按昨日梯队整体统计，见下方流转表。
+      </p>
+    </section>
+
+    <section v-if="flowReady" class="section">
+      <header class="section-head">
+        <span class="section-title">梯队流转 · 昨日 → 今日</span>
+        <span class="section-count">{{ ladderFlow.total }} 家 · 晋级 {{ ladderFlow.promoted }}</span>
+      </header>
+
+      <div v-if="flowRows.length" class="panel flow-board">
+        <div v-for="row in flowRows" :key="row.lbc" class="flow-row">
+          <div class="flow-level">
+            <b>{{ row.label }}</b>
+            <small>昨 {{ row.total }} 家</small>
+          </div>
+          <div class="flow-mid">
+            <div class="flow-track">
+              <i
+                class="flow-fill is-promoted"
+                :style="{ width: `${row.total ? (row.promoted / row.total) * 100 : 0}%` }"
+              ></i>
+              <i
+                class="flow-fill is-eliminated"
+                :style="{ width: `${row.total ? (row.eliminated / row.total) * 100 : 0}%` }"
+              ></i>
+            </div>
+            <div class="flow-copy">
+              <span class="is-up">晋级 {{ row.promoted }}</span>
+              <span class="is-down">淘汰 {{ row.eliminated }}</span>
+              <span v-if="row.retained" class="dim">数据存疑 {{ row.retained }}</span>
+            </div>
+          </div>
+          <div class="flow-rate" :class="{ 'is-gold': row.rate >= 30 }">
+            {{ row.rate }}<small>%</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel elim-board">
+        <div class="elim-head">
+          <span>连板淘汰 · 今日未回封</span>
+          <span class="dim">{{ eliminated.length }} 家</span>
+        </div>
+        <div v-if="eliminated.length" class="elim-list">
+          <div v-for="item in eliminatedShown" :key="item.code" class="elim-row">
+            <span class="elim-level">{{ item.lbc }}板</span>
+            <div class="elim-main">
+              <b>{{ item.name }}</b>
+              <small>{{ item.sector }}</small>
+            </div>
+            <span class="chip" :class="elimChip(item)" style="height: 18px">{{ item.statusLabel }}</span>
+            <span class="elim-pct mono" :class="tierTone(item.pct)">{{ fmtPct(item.pct) }}</span>
+          </div>
+          <button
+            v-if="eliminated.length > 6"
+            class="elim-toggle"
+            @click="showAllElim = !showAllElim"
+          >
+            {{ showAllElim ? '收起' : `展开其余 ${eliminated.length - 6} 家` }}
+          </button>
+        </div>
+        <div v-else class="elim-empty">
+          昨日 2 板及以上全部仍封在涨停{{ firstTierEliminated ? `；首板淘汰 ${firstTierEliminated} 家，见上方流转表` : '' }}。
+        </div>
+      </div>
+
+      <p class="section-note">
+        晋级 = 昨日涨停、今日继续封板且高度提升；淘汰 = 今日未出现在涨停池，含首板。下方名单只列昨日 ≥2 连板的淘汰股。
+        {{ live ? '盘中回封会自动移回天梯，炸板 / 跌停 / 未封只是当前快照。' : '收盘后为当日定稿。' }}
+      </p>
     </section>
 
     <section class="section">

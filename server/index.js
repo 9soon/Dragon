@@ -351,7 +351,8 @@ async function buildDashboard() {
     blowPool,
     downPool,
     sectors: sectorData.all,
-    prevPool
+    prevPool,
+    quotesByCode: qMap
   })
 
   const readyCount = sectorData.counts.dataReady
