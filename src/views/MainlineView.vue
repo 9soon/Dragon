@@ -11,6 +11,16 @@ const props = defineProps({
   indexQuote: { type: Object, default: null }
 })
 
+const emit = defineEmits(['open-edge'])
+
+const overnight = computed(() => props.dashboard.overnightBrief || null)
+const overnightRecs = computed(() => (overnight.value && overnight.value.recommendations) || [])
+const overnightPrep = computed(() => (overnight.value && overnight.value.preparation) || [])
+const overnightShown = computed(() =>
+  overnightRecs.value.length ? overnightRecs.value : overnightPrep.value
+)
+const overnightStrict = computed(() => overnightRecs.value.length > 0)
+
 const sectors = computed(() => props.dashboard.sectors || {})
 const marketIndex = computed(
   () => props.indexQuote || (props.dashboard.indices && props.dashboard.indices[0]) || null
@@ -59,6 +69,87 @@ const rankedThemes = computed(() =>
     />
 
     <MarketMood :sentiment="dashboard.sentiment" />
+
+    <section v-if="overnight" class="section">
+      <header class="section-head">
+        <span class="section-title">明日隔夜单</span>
+        <span
+          class="chip"
+          :class="overnightStrict ? 'chip--green' : 'chip--gold'"
+        >{{ overnight.statusLabel }}</span>
+        <button class="head-link" @click="emit('open-edge')">隔夜计划 ›</button>
+      </header>
+      <p class="section-note">{{ overnight.reason }}</p>
+
+      <div class="panel overnight-panel">
+        <div class="overnight-summary">
+          <div class="os-item">
+            <b>{{ overnight.dataReady || 0 }}</b>
+            <small>三关板块</small>
+          </div>
+          <div class="os-item">
+            <b :class="overnightRecs.length ? 'is-up' : 'is-dim'">{{ overnightRecs.length }}</b>
+            <small>严格候选</small>
+          </div>
+          <div class="os-item">
+            <b>{{ overnightPrep.length }}</b>
+            <small>准备池</small>
+          </div>
+          <div class="os-item">
+            <b :class="overnight.mode && overnight.mode.key === 'final' ? 'is-up' : 'is-dim'">
+              {{ (overnight.mode && overnight.mode.label) || '--' }}
+            </b>
+            <small>时段</small>
+          </div>
+        </div>
+
+        <p v-if="!overnightStrict && overnightPrep.length" class="overnight-caution">
+          今日没有同时满足三关、情绪、画像与封板质量的严格候选。以下为准备池最强票，只观察、不挂单；点「隔夜计划」看完整条件与风险。
+        </p>
+
+        <div v-if="overnightShown.length" class="overnight-list">
+          <div
+            v-for="item in overnightShown"
+            :key="item.code"
+            class="overnight-row"
+          >
+            <div class="or-head">
+              <div class="or-name">
+                <b>{{ item.name }}</b>
+                <span class="mono dim">{{ item.code }}</span>
+              </div>
+              <div class="or-score">
+                <b>{{ item.prepScore != null ? item.prepScore : item.score }}</b>
+                <small>{{ item.prepScore != null ? '准备分' : '评分' }}</small>
+              </div>
+            </div>
+            <div class="or-meta">
+              <span class="chip chip--dim">{{ item.sector || '未分类' }}</span>
+              <span class="chip chip--gold">{{ item.lbc }} 板</span>
+              <span v-if="item.weakLabel" class="chip chip--blue">{{ item.weakLabel }}</span>
+              <span v-if="item.acceptable" class="chip chip--green">严格候选</span>
+              <span v-else class="chip chip--dim">观察</span>
+            </div>
+            <div class="or-price">
+              <span>收盘 <b class="mono">{{ item.close == null ? '--' : item.close }}</b></span>
+              <span>涨停价 <b class="mono gold">{{ item.limitUp == null ? '--' : item.limitUp }}</b></span>
+              <span class="dim">{{ item.boardRule }}</span>
+            </div>
+            <p v-if="item.why && item.why.length" class="or-why">{{ item.why[0] }}</p>
+            <p v-if="item.risks && item.risks.length" class="or-risk">风险：{{ item.risks[0] }}</p>
+          </div>
+        </div>
+
+        <p v-else class="overnight-caution">
+          隔夜摘要生成中或当前数据不足；没有证据时不生成候选。
+        </p>
+
+        <div class="overnight-foot">
+          严格候选 = 三关通过 + 情绪修复/主升 + 画像 ≥55 + 隔夜评分 ≥65 + 2–5 板 + 昨日无炸板。
+          准备池按基因 42% / 基础 22% / 热度 14% / 高度 10% / 弱转强 12% 排序，不代表可以买入。
+        </div>
+      </div>
+    </section>
 
     <section class="section">
       <header class="section-head">
@@ -212,8 +303,12 @@ const rankedThemes = computed(() =>
         <div class="criterion">
           <span class="no">03</span>
           <div>
-            <b>资金连续</b>
-            <p>板块连续 2 个交易日主力净流入。只有当日脉冲、次日集体低开的热点直接排除。</p>
+            <b>资金承接（4 项证据）</b>
+            <p>
+              ① 主力资金：今、昨两日真实净流入；② 量能：同股成交额不低于昨日 75%；
+              ③ 封单：涨停股封单 / 流通 ≥ 0.5%；④ 溢价 / 晋级：昨日涨停股今日平均溢价为正且晋级率 ≥30%。
+              至少 3 项成立且主力资金不硬性转负才通过，不再只看一条资金线。
+            </p>
           </div>
         </div>
         <div class="criteria-foot">
@@ -226,6 +321,177 @@ const rankedThemes = computed(() =>
 </template>
 
 <style scoped>
+.head-link {
+  margin-left: auto;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--gold);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.head-link:active {
+  opacity: 0.6;
+}
+
+.overnight-panel {
+  padding: 11px 12px 10px;
+}
+
+.overnight-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding-bottom: 9px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.07);
+}
+
+.os-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.os-item b {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-align: center;
+  line-height: 1.25;
+}
+
+.os-item small {
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.05em;
+}
+
+.is-dim {
+  color: var(--dim) !important;
+}
+
+.overnight-caution {
+  margin: 9px 0 0;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 180, 94, 0.18);
+  background: rgba(255, 180, 94, 0.055);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: #e8c898;
+}
+
+.overnight-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.overnight-row {
+  padding: 10px 0 9px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.055);
+}
+
+.overnight-row:last-child {
+  border-bottom: 0;
+}
+
+.or-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.or-name {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.or-name b {
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.or-name .mono {
+  font-size: 11px;
+}
+
+.or-score {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  font-family: var(--mono);
+}
+
+.or-score b {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--gold);
+}
+
+.or-score small {
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.or-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.or-price {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.or-price .mono {
+  font-size: 12.5px;
+}
+
+.or-price .gold {
+  color: var(--gold);
+}
+
+.or-why,
+.or-risk {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.or-why {
+  color: var(--muted);
+}
+
+.or-risk {
+  color: #d9a58f;
+}
+
+.overnight-foot {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.07);
+  font-size: 10.5px;
+  line-height: 1.65;
+  color: var(--dim);
+}
+
 .more-panel {
   padding: 4px 12px 10px;
 }

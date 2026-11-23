@@ -122,7 +122,7 @@ function earlyScore(firstSeal) {
   return clamp(100 - sealMinutesFromOpen(firstSeal) * 0.42, 0, 100)
 }
 
-function compactStock(s) {
+function compactStock(s, weak = null) {
   const sealRatio = s.floatCap > 0 ? (s.sealFund / s.floatCap) * 100 : 0
   return {
     code: s.code,
@@ -141,17 +141,111 @@ function compactStock(s) {
     firstSealLabel: sealTimeLabel(s.firstSeal),
     blowCount: s.blowCount,
     ztDays: s.ztDays,
-    ztCount: s.ztCount
+    ztCount: s.ztCount,
+    weak: weak || null
   }
 }
 
-function buildSectors({ pool, prevPool, boards, flowMap, tradeDate }) {
+/* ------------------------------------------------------------------ *
+ * 资金承接 v2：四项证据，至少 3 项成立；资金流只是其中一项
+ *  - 主力资金：今 / 昨两日真实净流入（缺失时记 unknown，不硬判通过）
+ *  - 量能：板块涨停股成交额相对昨日同股（至少 2 只重叠）
+ *  - 封单：涨停股封单总额 / 流通市值合计
+ *  - 溢价 / 晋级：昨日涨停股今日平均溢价 + 板块晋级率
+ * ------------------------------------------------------------------ */
+
+function moneyEvidence({ sector, quotesByCode, prevPool }) {
+  const stats = sector.moneyStats || {}
+  const evidence = []
+
+  let fundState = 'unknown'
+  let fundText
+  if (stats.today != null && stats.yesterday != null) {
+    if (stats.today > 0 && stats.yesterday > 0) {
+      fundState = 'pass'
+      fundText = `今 ${flowText(stats.today)} · 昨 ${flowText(stats.yesterday)}`
+    } else {
+      fundState = 'fail'
+      fundText = `今 ${flowText(stats.today)} · 昨 ${flowText(stats.yesterday)}`
+    }
+  } else if (stats.today != null) {
+    fundText = `今 ${flowText(stats.today)} · 昨缺失`
+  } else if (stats.yesterday != null) {
+    fundText = `昨 ${flowText(stats.yesterday)} · 今缺失`
+  } else {
+    fundText = '主力资金明细缺失'
+  }
+  evidence.push({ key: 'fund', label: '主力资金', state: fundState, text: fundText })
+
+  let amountState = 'unknown'
+  let amountText = '重叠样本不足，量能待确认'
+  if (stats.amountRatio != null) {
+    amountState = stats.amountRatio >= 75 ? 'pass' : 'fail'
+    amountText = `涨停股成交额环比 ${round(stats.amountRatio, 0)}%`
+  }
+  evidence.push({ key: 'amount', label: '量能', state: amountState, text: amountText })
+
+  let sealState = 'unknown'
+  let sealText = '封单数据缺失'
+  if (stats.sealRatioAgg != null && stats.sealRatioAgg > 0) {
+    sealState = stats.sealRatioAgg >= 0.5 ? 'pass' : 'fail'
+    sealText = `封单占流通合计 ${round(stats.sealRatioAgg, 2)}%`
+  }
+  evidence.push({ key: 'seal', label: '封单', state: sealState, text: sealText })
+
+  let premiumState = 'unknown'
+  let premiumText = '昨日涨停溢价待行情确认'
+  let premium = null
+  if (quotesByCode && prevPool && prevPool.length) {
+    const group = prevPool.filter((s) => (s.sector || '未分类') === sector.name)
+    const quoted = group
+      .map((s) => quotesByCode.get(s.code))
+      .filter((q) => q && q.pct != null)
+    if (quoted.length >= 2) {
+      premium = quoted.reduce((sum, q) => sum + q.pct, 0) / quoted.length
+      const promotion = stats.promotionRate
+      const premiumOk = premium > 0
+      const promotionOk = promotion != null && promotion >= 30
+      premiumState = premiumOk && promotionOk ? 'pass' : 'fail'
+      premiumText =
+        `昨日涨停今日 ${round(premium, 2)}%` +
+        (promotion == null ? ' · 晋级率待确认' : ` · 晋级 ${round(promotion, 0)}%`)
+      if (promotion == null && premiumOk) premiumState = 'unknown'
+    }
+  }
+  evidence.push({ key: 'premium', label: '溢价/晋级', state: premiumState, text: premiumText })
+
+  const known = evidence.filter((e) => e.state !== 'unknown').length
+  const passes = evidence.filter((e) => e.state === 'pass').length
+  const fundHardFail = fundState === 'fail'
+  const premiumHardFail = premium != null && premium <= -2
+  const pass = known >= 3 && passes >= 3 && !fundHardFail && !premiumHardFail
+  const icons = evidence
+    .map((e) => `${e.label}${e.state === 'pass' ? '✓' : e.state === 'fail' ? '✗' : '–'}`)
+    .join(' ')
+
+  return {
+    pass,
+    proxy: !!stats.proxy,
+    twoDay: !!stats.twoDay,
+    evidence,
+    known,
+    passes,
+    premium,
+    detail: `${icons}`,
+    fullDetail: evidence.map((e) => `${e.label} ${e.text}`).join('；')
+  }
+}
+
+function buildSectors({ pool, prevPool, boards, flowMap, tradeDate, weakMap = null }) {
   const groups = groupPools(pool)
   const prevGroups = groupPools(prevPool)
   const { map: todayRanks, sorted: todaySorted } = rankCounts(groups)
   const { map: prevRanks, sorted: prevSorted } = rankCounts(prevGroups)
   const maxToday = Math.max(1, ...Array.from(groups.values()).map((a) => a.length))
   const maxPrev = Math.max(1, ...Array.from(prevGroups.values()).map((a) => a.length))
+  const prevByCode = new Map((prevPool || []).map((s) => [s.code, s]))
+  const todayCodes = new Set((pool || []).map((s) => s.code))
 
   const all = []
   for (const [name, stocks] of groups) {
@@ -187,8 +281,40 @@ function buildSectors({ pool, prevPool, boards, flowMap, tradeDate }) {
       todayFlow != null &&
       todayFlow > 0 &&
       board.flow5d > 0
-    /* 近似口径只做参考，不解除资金关；资金关只认两日真实净流入 */
-    const moneyPass = moneyTwoDay
+    /* 资金承接口径：两日净流入只是证据之一，量能 / 封单 / 溢价晋级同样计入 */
+    const prevStocks = prevGroups.get(name) || []
+    const promoted = prevStocks.filter((s) => todayCodes.has(s.code)).length
+    const promotionRate = prevStocks.length ? (promoted / prevStocks.length) * 100 : null
+    let amountToday = 0
+    let amountPrev = 0
+    let amountOverlap = 0
+    for (const s of stocks) {
+      const prev = prevByCode.get(s.code)
+      if (!prev) continue
+      if (s.amount > 0 && prev.amount > 0) {
+        amountToday += s.amount
+        amountPrev += prev.amount
+        amountOverlap++
+      }
+    }
+    const amountRatio =
+      amountOverlap >= 2 && amountPrev > 0 ? (amountToday / amountPrev) * 100 : null
+    const sealFundSum = stocks.reduce((sum, s) => sum + (s.sealFund || 0), 0)
+    const capSum = stocks.reduce((sum, s) => sum + (s.floatCap || 0), 0)
+    const sealRatioAgg = capSum > 0 ? (sealFundSum / capSum) * 100 : null
+    const moneyStats = {
+      today: todayFlow,
+      yesterday: yesterdayFlow,
+      twoDay: moneyTwoDay,
+      proxy: moneyProxy,
+      prevCount: prevStocks.length,
+      promoted,
+      promotionRate,
+      amountRatio,
+      sealRatioAgg
+    }
+    const moneyCheck = moneyEvidence({ sector: { name, moneyStats }, quotesByCode: null, prevPool })
+    const moneyPass = moneyCheck.pass
     const rankToday = todayRanks.get(name) || 99
     const rankPrev = prevCount ? prevRanks.get(name) || 99 : 99
 
@@ -199,19 +325,11 @@ function buildSectors({ pool, prevPool, boards, flowMap, tradeDate }) {
       100
     )
     const ladderScore = (high ? 34 : 0) + (mid ? 33 : 0) + (first ? 33 : 0)
-    let moneyScore = 30
-    if (todayFlow != null) {
-      moneyScore = clamp(
-        42 +
-          todayFlow / 1e8 * 1.1 +
-          (yesterdayFlow != null ? yesterdayFlow / 1e8 * 0.7 : 0) +
-          (board && Number.isFinite(board.flowPct) ? board.flowPct * 2.5 : 0),
-        0,
-        100
-      )
-      if (moneyPass) moneyScore = Math.max(moneyScore, 62)
-      if (todayFlow < 0 && yesterdayFlow != null && yesterdayFlow < 0) moneyScore = Math.min(moneyScore, 28)
+    let moneyScore = clamp(30 + moneyCheck.passes * 17 - (moneyCheck.known < 4 ? 5 : 0), 0, 100)
+    if (moneyCheck.evidence.some((e) => e.key === 'fund' && e.state === 'fail')) {
+      moneyScore = Math.min(moneyScore, 28)
     }
+    if (moneyPass) moneyScore = Math.max(moneyScore, 68)
     const leader = sortedStocks[0]
     const heightScore = clamp(
       (maxBoard / 5) * 100 +
@@ -244,23 +362,17 @@ function buildSectors({ pool, prevPool, boards, flowMap, tradeDate }) {
       },
       {
         key: 'money',
-        label: '资金连续流入',
+        label: '资金承接（4项）',
         pass: moneyPass,
         proxy: moneyProxy,
-        detail:
-          todayFlow == null
-            ? '板块资金映射缺失'
-            : moneyTwoDay
-              ? `今${flowText(todayFlow)} · 昨${flowText(yesterdayFlow)}`
-              : moneyProxy
-                ? `今${flowText(todayFlow)} · 5日${flowText(board.flow5d)}（近似）`
-                : `今${flowText(todayFlow)} · 昨${yesterdayFlow == null ? '--' : flowText(yesterdayFlow)}`
+        evidence: moneyCheck.evidence,
+        detail: moneyCheck.detail
       }
     ]
     const missing = checks.filter((c) => !c.pass).map((c) => c.label)
     if (moneyProxy) missing.push('资金两日确认')
     if (!board) missing.push('板块资金映射')
-    const dataReady = continuityPass && complete && moneyTwoDay && !!board
+    const dataReady = continuityPass && complete && moneyPass && !!board
     const gatesPassed = checks.filter((c) => c.pass && !c.proxy).length
 
     const group = prevCount >= 2 && todayCount >= 2 ? 'main' : todayCount >= 2 ? 'new' : 'other'
@@ -276,6 +388,7 @@ function buildSectors({ pool, prevPool, boards, flowMap, tradeDate }) {
       rankPrev,
       ladder: { high, mid, first, complete, score: ladderScore },
       maxBoard,
+      continuityPass,
       dataReady,
       gatesPassed,
       checks,
@@ -299,10 +412,13 @@ function buildSectors({ pool, prevPool, boards, flowMap, tradeDate }) {
         fiveDay: board ? board.flow5d : null,
         twoDay: moneyTwoDay,
         proxy: moneyProxy,
-        pass: moneyPass
+        pass: moneyPass,
+        evidence: moneyCheck.evidence,
+        premium: moneyCheck.premium,
+        stats: moneyStats
       },
-      leader: compactStock(leader),
-      stocks: sortedStocks.map(compactStock),
+      leader: compactStock(leader, weakMap ? weakMap.get(leader.code) : null),
+      stocks: sortedStocks.map((s) => compactStock(s, weakMap ? weakMap.get(s.code) : null)),
       scoreParts: {
         count: Math.round(countScore),
         continuity: Math.round(contScore),
@@ -366,6 +482,82 @@ function buildSectors({ pool, prevPool, boards, flowMap, tradeDate }) {
     prevSorted,
     todaySorted
   }
+}
+
+/**
+ * 行情到位后补上“昨日涨停溢价”证据，并重算资金承接关、热度与排序。
+ * 必须在批量行情之后调用一次，否则资金承接只有 3 项证据。
+ */
+function applySectorEvidence(sectorData, { quotesByCode, prevPool }) {
+  if (!sectorData || !Array.isArray(sectorData.all)) return sectorData
+  for (const sector of sectorData.all) {
+    const money = sector.money || {}
+    const moneyStats = {
+      ...(money.stats || {}),
+      today: money.today != null ? money.today : null,
+      yesterday: money.yesterday != null ? money.yesterday : null,
+      twoDay: !!money.twoDay,
+      proxy: !!money.proxy
+    }
+    const check = moneyEvidence({
+      sector: { ...sector, moneyStats },
+      quotesByCode,
+      prevPool
+    })
+    sector.money.pass = check.pass
+    sector.money.evidence = check.evidence
+    sector.money.premium = check.premium
+    const moneyCheck = (sector.checks || []).find((c) => c.key === 'money')
+    if (moneyCheck) {
+      moneyCheck.pass = check.pass
+      moneyCheck.proxy = check.proxy
+      moneyCheck.evidence = check.evidence
+      moneyCheck.detail = check.detail
+    }
+    let moneyScore = clamp(30 + check.passes * 17 - (check.known < 4 ? 5 : 0), 0, 100)
+    if (check.evidence.some((e) => e.key === 'fund' && e.state === 'fail')) {
+      moneyScore = Math.min(moneyScore, 28)
+    }
+    if (check.pass) moneyScore = Math.max(moneyScore, 68)
+    sector.scoreParts.money = Math.round(moneyScore)
+    sector.heat = Math.round(
+      0.32 * sector.scoreParts.count +
+        0.22 * sector.scoreParts.continuity +
+        0.24 * sector.scoreParts.ladder +
+        0.14 * sector.scoreParts.money +
+        0.08 * sector.scoreParts.height
+    )
+    sector.dataReady =
+      sector.continuityPass && sector.ladder.complete && check.pass && !!sector.board
+    sector.gatesPassed = (sector.checks || []).filter((c) => c.pass && !c.proxy).length
+    const missing = (sector.checks || []).filter((c) => !c.pass).map((c) => c.label)
+    if (check.proxy) missing.push('资金两日确认')
+    if (!sector.board) missing.push('板块资金映射')
+    sector.missing = missing
+  }
+  sectorData.all.sort((a, b) => b.heat - a.heat || b.todayCount - a.todayCount)
+  const strengthCmp = (a, b) =>
+    b.gatesPassed - a.gatesPassed ||
+    Number(b.dataReady) - Number(a.dataReady) ||
+    b.heat - a.heat ||
+    b.maxBoard - a.maxBoard ||
+    b.todayCount - a.todayCount
+  sectorData.mainCandidates = sectorData.all
+    .filter((s) => s.group === 'main')
+    .slice()
+    .sort(strengthCmp)
+    .slice(0, 5)
+  sectorData.newThemes = sectorData.all
+    .filter((s) => s.group === 'new')
+    .slice(0, 5)
+  sectorData.counts = {
+    sectors: sectorData.all.length,
+    mainCandidates: sectorData.mainCandidates.length,
+    dataReady: sectorData.all.filter((s) => s.dataReady).length,
+    newThemes: sectorData.newThemes.length,
+    fading: (sectorData.fading || []).length
+  }
+  return sectorData
 }
 
 function summarizeTier(list) {
@@ -516,10 +708,37 @@ function buildSentiment({
     high: pool.filter((s) => s.lbc >= 3).length
   }
 
+  /* 进攻 / 防守信号：给“能不能打板”一个独立于主线的环境判断 */
+  const promoteRate = propagation.overall.rate
+  const attack =
+    promoteRate != null &&
+    promoteRate >= 35 &&
+    blowRate < 35 &&
+    premiumAvg != null &&
+    premiumAvg >= 0 &&
+    maxBoard >= 3 &&
+    tierCounts.first > 0 &&
+    tierCounts.mid > 0
+  const defense =
+    blowRate >= 45 ||
+    (promoteRate != null && promoteRate < 25) ||
+    (premiumAvg != null && premiumAvg < 0 && blowRate >= 30)
+  const signal = {
+    attack,
+    defense,
+    label: attack ? '进攻窗口' : defense ? '防守窗口' : '观察窗口',
+    note: attack
+      ? `晋级率 ${promoteRate}%，溢价 ${premiumAvg}%，炸板率 ${blowRate}%，可只在最强核心上试错。`
+      : defense
+        ? `炸板率 ${blowRate}%，晋级率 ${promoteRate == null ? '--' : promoteRate + '%'}，溢价 ${premiumAvg == null ? '--' : premiumAvg + '%'}，优先降频与控制回撤。`
+        : `晋级率 ${promoteRate == null ? '--' : promoteRate + '%'}，炸板率 ${blowRate}%，等晋级率回到 35% 以上再提高进攻强度。`
+  }
+
   return {
     score,
     phaseKey,
     phase: PHASES[phaseKey],
+    signal,
     limitUp,
     limitDown,
     blown,
@@ -643,6 +862,7 @@ function makePoolPick(stock, role, sector, quote) {
     tags,
     reasons: reasons.slice(0, 5),
     risks: risks.slice(0, 4),
+    weak: stock.weak || null,
     source: 'pool'
   }
 }
@@ -755,7 +975,7 @@ function buildPicks({ sectors, quotesByCode }) {
     }
   }
 
-  return candidates.sort((a, b) => b.score - a.score).slice(0, 8)
+  return candidates.sort((a, b) => b.score - a.score).slice(0, 12)
 }
 
 function buildLadder(pool) {
@@ -945,6 +1165,7 @@ function flowText(v) {
 
 module.exports = {
   buildSectors,
+  applySectorEvidence,
   buildSentiment,
   buildPicks,
   buildReview,

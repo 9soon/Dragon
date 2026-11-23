@@ -14,11 +14,11 @@ const { items } = useCatalysts()
 
 const segment = ref('auction')
 const segments = [
-  { key: 'auction', label: '竞价抓强', sub: '9:15–9:30' },
+  { key: 'auction', label: '竞价 / 盘中', sub: '9:15–15:00' },
   { key: 'overnight', label: '隔夜计划', sub: '15:00 后定稿' },
   { key: 'profile', label: '老龙画像', sub: '历史样本' }
 ]
-const flowSteps = ['收盘复盘', '三关筛选', '催化核验', '画像匹配', '竞价复核']
+const flowSteps = ['收盘复盘', '三关筛选', '催化核验', '画像匹配', '竞价 / 盘中']
 
 const auction = ref(null)
 const overnight = ref(null)
@@ -58,7 +58,7 @@ const gate = computed(() => props.dashboard.gate || {})
 const segTitle = computed(
   () =>
     ({
-      auction: '盘前竞价抓强',
+      auction: auction.value && auction.value.intraday ? '盘中实时抓板' : '盘前竞价抓强',
       overnight: '盘后隔夜计划',
       profile: '老龙头画像'
     })[segment.value]
@@ -67,9 +67,9 @@ const segDesc = computed(
   () =>
     ({
       auction:
-        '只在 9:15–9:30 计算竞价强度。9:20 前可撤单，一切等 9:20 后复核；没有三关与催化，竞价再强也只观察。',
+        '竞价 9:15–9:30 与盘中 9:30–15:00 都实时计算：盘中按封板确认、近板强度、量比、板块共振与弱转强排序，只列最强 5 只；没有三关与催化，再强也只观察。',
       overnight:
-        '收盘后把主线、画像、催化合成条件单。只在三关通过且情绪修复 / 主升时制定，冰点与退潮不挂。',
+        '收盘后把三关、情绪、弱转强与老龙画像合成条件单。只在三关通过且情绪修复 / 主升时制定，冰点与退潮不挂。',
       profile:
         '回溯板块内 3 板以上领涨股，统计次日延续率与隔夜跳空。样本统计不是准确率，只用于剔除明显不符合龙头特征的标的。'
     })[segment.value]
@@ -158,12 +158,30 @@ const auctionWatch = computed(
 
 const auctionStage = computed(() => (auction.value && auction.value.stage) || null)
 const auctionActive = computed(() => !!(auction.value && auction.value.active))
+const auctionIsIntraday = computed(() => !!(auction.value && auction.value.intraday))
 const auctionSteps = [
   { key: 'trial', time: '9:15', label: '试撮' },
   { key: 'locked', time: '9:20', label: '锁单' },
   { key: 'final', time: '9:25', label: '定稿' },
   { key: 'open', time: '9:30', label: '承接' }
 ]
+const auctionStepsView = computed(() =>
+  auctionSteps.map((s, i) =>
+    i === 3 && auctionIsIntraday.value ? { ...s, label: '盘中' } : s
+  )
+)
+const auctionConfirmLabel = computed(() => {
+  if (!auctionActive.value) return '竞价前准备'
+  return auctionIsIntraday.value ? '封板确认' : '可执行候选'
+})
+const auctionListLabel = computed(() => {
+  if (!auctionActive.value) return '最强 5 只 · 下一场准备'
+  return auctionIsIntraday.value ? '最强 5 只 · 1.5 秒实时' : '最强 5 只 · 1.5 秒轮询'
+})
+const auctionRingLabel = computed(() => {
+  if (!auctionActive.value) return '准备分'
+  return auctionIsIntraday.value ? '实时分' : '竞价分'
+})
 
 const currentStep = computed(() => {
   const key = auctionStage.value ? auctionStage.value.key : null
@@ -223,11 +241,22 @@ const overnightRecs = computed(() =>
     .filter((c) => !catFor(c.sectorKey).rumor)
     .map((c) => decorateOvernight(c, true))
 )
-const overnightWatch = computed(() =>
-  ((overnight.value && overnight.value.watchlist) || [])
+const overnightPrep = computed(() =>
+  ((overnight.value && overnight.value.preparation) || [])
     .filter((c) => !catFor(c.sectorKey).rumor)
-    .map((c) => decorateOvernight(c, false))
+    .map((c) => decorateOvernight(c, !!c.acceptable))
 )
+const overnightPrepShown = computed(() => {
+  if (!overnightRecs.value.length) return overnightPrep.value
+  const recCodes = new Set(overnightRecs.value.map((c) => c.code))
+  return overnightPrep.value.filter((c) => !recCodes.has(c.code))
+})
+const overnightWatch = computed(() => {
+  const prepCodes = new Set(overnightPrep.value.map((c) => c.code))
+  return ((overnight.value && overnight.value.watchlist) || [])
+    .filter((c) => !catFor(c.sectorKey).rumor && !prepCodes.has(c.code))
+    .map((c) => decorateOvernight(c, false))
+})
 const overnightRumorCount = computed(() =>
   ((overnight.value && overnight.value.recommendations) || []).filter(
     (c) => catFor(c.sectorKey).rumor
@@ -573,7 +602,7 @@ onBeforeUnmount(() => {
         <p class="stage-note">{{ auction.stage.note }}</p>
         <div class="timeline">
           <div
-            v-for="(step, idx) in auctionSteps"
+            v-for="(step, idx) in auctionStepsView"
             :key="step.key"
             class="tl-step"
             :class="{ 'is-on': idx === currentStep, 'is-past': idx < currentStep }"
@@ -599,7 +628,7 @@ onBeforeUnmount(() => {
         <div class="mini-stats">
           <div class="mini-stat">
             <b class="is-up">{{ auctionActive ? auctionActionable : auctionCards.length }}</b>
-            <small>{{ auctionActive ? '可执行候选' : '竞价前准备' }}</small>
+            <small>{{ auctionActive ? (auctionIsIntraday ? '封板确认' : '可执行候选') : '竞价前准备' }}</small>
           </div>
           <div class="mini-stat">
             <b>{{ auctionActive ? auctionWatch : overnightExecutable }}</b>
@@ -629,10 +658,8 @@ onBeforeUnmount(() => {
         </div>
 
         <header class="section-head">
-          <span class="section-title">{{ auction.active ? '竞价强势候选' : '下一场竞价的准备池' }}</span>
-          <span class="section-count">
-            {{ auction.active ? `${auctionCards.length} 只 · 1.5 秒轮询` : `${auctionCards.length} 只 · 不做竞价拟合` }}
-          </span>
+          <span class="section-title">{{ auction.active ? (auction.intraday ? '盘中强势候选' : '竞价强势候选') : '下一场竞价的准备池' }}</span>
+          <span class="section-count">{{ auctionListLabel }}</span>
           <button class="section-link" @click="loadAuction()">刷新</button>
         </header>
 
@@ -658,11 +685,11 @@ onBeforeUnmount(() => {
             </div>
             <div class="ac-ring">
               <ScoreRing
-                :value="auctionActive ? c.score : c.fit.score"
+                :value="auctionActive ? c.score : (c.prepScore != null ? c.prepScore : c.fit.score)"
                 :size="52"
                 :stroke="4"
               />
-              <small>{{ auctionActive ? '竞价分' : '画像分' }}</small>
+              <small>{{ auctionRingLabel }}</small>
             </div>
           </div>
 
@@ -675,35 +702,36 @@ onBeforeUnmount(() => {
           <div class="metric-grid">
             <template v-if="auctionActive">
               <div class="metric">
-                <small>竞价涨幅</small>
+                <small>{{ auctionIsIntraday ? '实时涨幅' : '竞价涨幅' }}</small>
                 <b :class="pctTone(c.pct)">{{ fmtPct(c.pct) }}</b>
               </div>
               <div class="metric">
-                <small>竞价额</small>
+                <small>{{ auctionIsIntraday ? '成交额' : '竞价额' }}</small>
                 <b class="mono">{{ fmtMoney(c.amount, { sign: false }) }}</b>
                 <span v-if="c.amountRatio != null">占昨量 {{ fmtNum(c.amountRatio, 1) }}%</span>
+                <span v-else-if="c.volRatio != null">量比 {{ fmtNum(c.volRatio, 2) }}</span>
               </div>
               <div class="metric">
-                <small>首封 / 封单</small>
+                <small>{{ auctionIsIntraday ? '封板 / 封单' : '首封 / 封单' }}</small>
                 <b class="mono">{{ c.firstSealLabel }}</b>
-                <span>{{ fmtNum(c.sealRatio, 2) }}% 流通</span>
+                <span>{{ c.sealed ? '已封板' : '未封板' }} · {{ fmtNum(c.sealRatio, 2) }}%</span>
               </div>
               <div class="metric">
-                <small>画像匹配</small>
-                <b>{{ c.fit.score }}</b>
-                <span>基础 {{ c.fit.staticScore }}</span>
+                <small>基因 / 画像</small>
+                <b>{{ c.geneScore }}</b>
+                <span>画像 {{ c.fit.score }} · {{ c.fit.sampleEvidence.length }} 条样本</span>
               </div>
             </template>
             <template v-else>
               <div class="metric">
-                <small>观察分</small>
-                <b>{{ c.score }}</b>
-                <span>{{ c.observation ? '观察池' : '三关候选' }}</span>
+                <small>准备分</small>
+                <b>{{ c.prepScore != null ? c.prepScore : c.score }}</b>
+                <span>基因 {{ c.geneScore }} · {{ c.observation ? '观察池' : '三关候选' }}</span>
               </div>
               <div class="metric">
-                <small>画像分</small>
-                <b>{{ c.fit.score }}</b>
-                <span>{{ c.fit.sampleEvidence.length }} 条样本</span>
+                <small>涨停价参考</small>
+                <b class="mono is-up">{{ c.limitUp == null ? '--' : fmtPrice(c.limitUp) }}</b>
+                <span>{{ c.boardRule }}</span>
               </div>
               <div class="metric">
                 <small>首封 / 封单</small>
@@ -719,15 +747,12 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="ac-lines">
-            <p v-for="line in (auctionActive ? c.reasons : c.fit.hits.slice(0, 4))" :key="line">
+            <p v-for="line in (auctionActive ? c.reasons : c.why).slice(0, 5)" :key="line">
               <span>·</span>{{ line }}
             </p>
           </div>
-          <div v-if="auctionActive && c.risks && c.risks.length" class="ac-risks">
-            <p v-for="line in c.risks" :key="line">! {{ line }}</p>
-          </div>
-          <div v-else-if="!auctionActive && c.fit.misses.length" class="ac-risks is-soft">
-            <p v-for="line in c.fit.misses.slice(0, 3)" :key="line">! {{ line }}</p>
+          <div v-if="c.risks && c.risks.length" class="ac-risks" :class="{ 'is-soft': !auctionActive }">
+            <p v-for="line in c.risks.slice(0, 4)" :key="line">! {{ line }}</p>
           </div>
 
           <div v-if="!auctionActive" class="prep-box">
@@ -739,6 +764,18 @@ onBeforeUnmount(() => {
             v-if="expanded === `a-${c.code}`"
             class="evidence"
           >
+            <div class="gene-grid">
+              <div v-for="f in c.factors" :key="f.key" class="gene-item">
+                <div class="gene-head">
+                  <span>{{ f.label }}</span>
+                  <b>{{ f.value }}</b>
+                </div>
+                <div class="gene-track">
+                  <i :style="{ width: `${Math.max(0, Math.min(100, f.value))}%` }"></i>
+                </div>
+                <small>{{ f.weight }}% · {{ f.text }}</small>
+              </div>
+            </div>
             <div v-for="e in c.fit.sampleEvidence" :key="e.dimension" class="ev-row">
               <div class="ev-main">
                 <b>{{ e.dimension }}</b>
@@ -756,19 +793,28 @@ onBeforeUnmount(() => {
 
           <div class="ac-foot">
             <button class="link-btn" @click="toggleExpand(`a-${c.code}`)">
-              画像依据 · {{ expanded === `a-${c.code}` ? '收起' : '展开' }}
+              评分依据 · {{ expanded === `a-${c.code}` ? '收起' : '展开' }}
             </button>
             <button class="link-btn" @click="editCatalyst(c.sectorKey, c)">核验催化</button>
           </div>
 
           <div v-if="auctionActive" class="verdict-line" :class="{ 'is-ok': c.actionable }">
-            {{
-              c.actionable
-                ? '催化已核验：仍要等 9:20 后不回落、同板块共振、9:30 有承接，才按计划执行。'
-                : c.cat.valid
-                  ? '竞价条件未完全达标：只观察，不为了“看起来强”破坏纪律。'
-                  : '催化未核验：即使竞价确认，也只按观察处理，不进入执行清单。'
-            }}
+            <template v-if="c.actionable">
+              {{
+                auctionIsIntraday
+                  ? '封板确认且催化已核验：只做计划内的板；开板不回封、封单快速变薄立即撤出。'
+                  : '催化已核验：仍要等 9:20 后不回落、同板块共振、9:30 有承接，才按计划执行。'
+              }}
+            </template>
+            <template v-else>
+              {{
+                c.cat.valid
+                  ? auctionIsIntraday
+                    ? '盘口条件未完全达标：只观察，不追高、不接飞刀。'
+                    : '竞价条件未完全达标：只观察，不为了“看起来强”破坏纪律。'
+                  : '催化未核验：即使盘口确认，也只按观察处理，不进入执行清单。'
+              }}
+            </template>
           </div>
         </article>
 
@@ -781,12 +827,21 @@ onBeforeUnmount(() => {
         </button>
 
         <section class="panel rule-panel">
-          <h4>竞价纪律</h4>
-          <div class="rule-line"><span>01</span><p>9:15–9:20 可撤单，只看不追；虚假挂单不计入判断。</p></div>
-          <div class="rule-line"><span>02</span><p>9:20–9:25 不可撤单，是竞价参考价值最高的 5 分钟。</p></div>
-          <div class="rule-line"><span>03</span><p>高开 +2% ~ +8%，竞价额 ≥ 2000 万且 ≥ 昨日成交 2%，才进入强势观察。</p></div>
-          <div class="rule-line"><span>04</span><p>高开 > 8% 不追，低开翻绿剔除；9:30 承接失败按失效处理。</p></div>
-          <div class="rule-line"><span>05</span><p>板块三关未过或催化未核验，竞价再强也只是观察，不执行。</p></div>
+          <h4>{{ auctionIsIntraday ? '盘中抓板纪律' : '竞价纪律' }}</h4>
+          <template v-if="auctionIsIntraday">
+            <div class="rule-line"><span>01</span><p>封板确认只认最新价与买一都贴在涨停价；未封板一律按观察处理，不把“快涨停”当已经涨停。</p></div>
+            <div class="rule-line"><span>02</span><p>排序：封板确认 → 近板强度 → 量比 / 成交 → 板块共振 → 弱转强 → 封板质量与历史画像；只列最强 5 只。</p></div>
+            <div class="rule-line"><span>03</span><p>只做主线核心，不追没有板块支撑的孤立脉冲；非涨停池成员缺少昨日封板质量，分数自动降级。</p></div>
+            <div class="rule-line"><span>04</span><p>炸板不回封、封单快速变薄、跌破分时均线，按失效处理；不补仓、不摊低成本。</p></div>
+            <div class="rule-line"><span>05</span><p>板块三关未过或催化未核验，盘中再强也只是观察，不进入执行清单。</p></div>
+          </template>
+          <template v-else>
+            <div class="rule-line"><span>01</span><p>9:15–9:20 可撤单，只看不追；虚假挂单不计入判断。</p></div>
+            <div class="rule-line"><span>02</span><p>9:20–9:25 不可撤单，是竞价参考价值最高的 5 分钟。</p></div>
+            <div class="rule-line"><span>03</span><p>高开 +2% ~ +8%，竞价额 ≥ 2000 万且 ≥ 昨日成交 2%，才进入强势观察。</p></div>
+            <div class="rule-line"><span>04</span><p>高开 > 8% 不追，低开翻绿剔除；9:30 承接失败按失效处理。</p></div>
+            <div class="rule-line"><span>05</span><p>板块三关未过或催化未核验，竞价再强也只是观察，不执行。</p></div>
+          </template>
         </section>
 
         <section v-if="auction.notes && auction.notes.length" class="panel note-panel">
@@ -824,9 +879,9 @@ onBeforeUnmount(() => {
           <p class="mode-reason">{{ overnight.reason }}</p>
           <div class="mode-stats">
             <div><b>{{ overnight.dataReady }}</b><small>三关板块</small></div>
-            <div><b>{{ overnightRecs.length }}</b><small>计划候选</small></div>
+            <div><b>{{ overnightRecs.length }}</b><small>严格候选</small></div>
             <div><b class="is-up">{{ overnightExecutable }}</b><small>可挂条件单</small></div>
-            <div><b>{{ overnightWatch.length }}</b><small>观察</small></div>
+            <div><b>{{ overnightPrep.length }}</b><small>准备池</small></div>
           </div>
           <div class="mode-foot">
             <p>{{ overnight.mode.note }}</p>
@@ -942,7 +997,8 @@ onBeforeUnmount(() => {
             <details class="on-detail">
               <summary>查看评分与画像依据</summary>
               <p class="dim">
-                隔夜分 = 56% 基础分 + 30% 画像分 + 14% 板块热度；基础 {{ c.baseScore }}，画像
+                隔夜分 = 50% 基础分 + 30% 基因分 + 20% 板块热度；准备分 = 42% 基因 + 22% 基础 + 14% 热度
+                + 10% 高度 + 12% 弱转强。基础 {{ c.baseScore }}，基因 {{ c.geneScore }}，画像
                 {{ c.fit.score }}（静态 {{ c.fit.staticScore }} / 样本
                 {{ c.fit.empiricalScore == null ? '--' : c.fit.empiricalScore }}）。
               </p>
@@ -964,7 +1020,7 @@ onBeforeUnmount(() => {
         <div v-else-if="overnight.status !== 'empty'" class="empty-view">
           <div class="glyph">候</div>
           <b>没有通过严格画像的核心</b>
-          <p>数据允许制定计划，但个股还没同时满足画像、连板高度与隔夜分门槛。宁缺毋滥。</p>
+          <p>数据允许制定计划，但个股还没同时满足三关、情绪、画像、连板高度与无炸板门槛。宁缺毋滥；下方准备池只解释“为什么被关注”，不构成挂单依据。</p>
         </div>
 
         <div v-else class="empty-view">
@@ -973,9 +1029,74 @@ onBeforeUnmount(() => {
           <p>{{ overnight.reason }}</p>
         </div>
 
+        <section v-if="overnightPrepShown.length" class="section">
+          <header class="section-head">
+            <span class="section-title">
+              {{ overnightRecs.length ? '准备池其余观察' : '准备池 · 最强 5 只' }}
+            </span>
+            <span class="section-count">按准备分排序 · 只解释不挂单</span>
+          </header>
+          <p class="section-note">
+            准备池 = 基因 42% + 基础 22% + 板块热度 14% + 高度 10% + 弱转强 12%。
+            板块最高板龙头即使被炸板 / 过热换手罚分挤出选股前八，也会被找回并明示风险；未满足严格条件就不挂单。
+          </p>
+
+          <article
+            v-for="(c, idx) in overnightPrepShown"
+            :key="c.code"
+            class="prep-card"
+            :class="{ 'is-ready': c.acceptable }"
+          >
+            <div class="prep-head">
+              <span class="prep-rank">{{ idx + 1 }}</span>
+              <div class="prep-id">
+                <div class="prep-name">
+                  <b>{{ c.name }}</b>
+                  <span class="mono">{{ c.code }}</span>
+                </div>
+                <div class="prep-sub">
+                  {{ c.sector }} · {{ c.lbc }} 板 · {{ c.boardRule }}
+                  <template v-if="c.weakLabel"> · {{ c.weakLabel }}</template>
+                </div>
+              </div>
+              <div class="prep-score">
+                <b>{{ c.prepScore }}</b>
+                <small>准备分</small>
+              </div>
+            </div>
+
+            <div class="chip-row">
+              <span class="chip" :class="statusChipClass(c)">{{ c.displayLabel }}</span>
+              <span class="chip" :class="catChipClass(c.cat)">{{ c.cat.label }}</span>
+              <span v-for="tag in c.tags" :key="tag" class="tag">{{ tag }}</span>
+            </div>
+
+            <div class="prep-metrics">
+              <div><small>收盘</small><b class="mono">{{ fmtPrice(c.close) }}</b></div>
+              <div><small>涨停价</small><b class="mono is-up">{{ fmtPrice(c.limitUp) }}</b></div>
+              <div><small>基因分</small><b>{{ c.geneScore }}</b></div>
+              <div><small>隔夜分</small><b>{{ c.score }}</b></div>
+            </div>
+
+            <div class="prep-lines">
+              <p v-for="line in (c.why || []).slice(0, 3)" :key="line"><span>·</span>{{ line }}</p>
+            </div>
+            <div v-if="c.risks && c.risks.length" class="prep-risks">
+              <p v-for="line in c.risks.slice(0, 3)" :key="line">! {{ line }}</p>
+            </div>
+
+            <div class="prep-foot">
+              <button class="link-btn" @click="editCatalyst(c.sectorKey, c)">
+                {{ c.cat.valid ? '催化已核验' : '核验催化' }}
+              </button>
+              <span class="dim">严格候选需同时满足三关、情绪、画像、2–5 板与无炸板</span>
+            </div>
+          </article>
+        </section>
+
         <section v-if="overnightWatch.length" class="section">
           <header class="section-head">
-            <span class="section-title">降级观察</span>
+            <span class="section-title">其余观察</span>
             <span class="section-count">{{ overnightWatch.length }} 只</span>
           </header>
           <div class="panel watch-panel">
@@ -1828,6 +1949,59 @@ onBeforeUnmount(() => {
   color: #c9b48e;
 }
 
+.gene-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 9px;
+}
+
+.gene-item {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.gene-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.gene-head b {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gold);
+}
+
+.gene-track {
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.gene-track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(243, 199, 119, 0.55), var(--gold));
+}
+
+.gene-item small {
+  display: block;
+  margin-top: 3px;
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+
 .evidence {
   margin-top: 9px;
   padding-top: 8px;
@@ -2367,6 +2541,163 @@ onBeforeUnmount(() => {
   font-size: 10px;
   line-height: 1.5;
   color: #b58e91;
+}
+
+.prep-card {
+  margin-bottom: 10px;
+  padding: 11px 12px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.prep-card.is-ready {
+  border-color: rgba(243, 199, 119, 0.3);
+  background: rgba(243, 199, 119, 0.035);
+}
+
+.prep-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.prep-rank {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.prep-id {
+  min-width: 0;
+  flex: 1;
+}
+
+.prep-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.prep-name b {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.prep-name .mono {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.prep-sub {
+  margin-top: 2px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+.prep-score {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: var(--mono);
+}
+
+.prep-score b {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--gold);
+}
+
+.prep-score small {
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.prep-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  margin-top: 8px;
+  padding: 7px 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.prep-metrics div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.prep-metrics small {
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.prep-metrics b {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.prep-lines {
+  margin-top: 7px;
+}
+
+.prep-lines p {
+  display: flex;
+  gap: 5px;
+  margin: 0 0 3px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-soft);
+}
+
+.prep-lines p span {
+  color: rgba(243, 199, 119, 0.6);
+}
+
+.prep-risks {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 84, 96, 0.14);
+  background: rgba(255, 84, 96, 0.04);
+}
+
+.prep-risks p {
+  margin: 0 0 2px;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: #d7a3a7;
+}
+
+.prep-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.prep-foot .dim {
+  font-size: 9.5px;
+  line-height: 1.5;
+  text-align: right;
 }
 
 .rule-panel,

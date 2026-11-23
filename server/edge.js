@@ -8,9 +8,17 @@ const {
   getLatestTradingPool,
   getPrevTradingPool,
   batchQuotes,
+  scanMarketLeaders,
   tencentKline
 } = require('./eastmoney')
 const { sealMinutesFromOpen, sealTimeLabel } = require('./scoring')
+const {
+  limitRatioFor,
+  fitDragonCandidate,
+  geneScore,
+  buildWeakContext,
+  weakForCode
+} = require('./gene')
 const {
   beijingNow,
   dateStamp,
@@ -18,7 +26,8 @@ const {
   clamp,
   round,
   num,
-  sleep
+  sleep,
+  stripLevel
 } = require('./util')
 
 const PROFILE_FILE = path.join(__dirname, '..', '.cache', 'dragon-profile.json')
@@ -36,12 +45,6 @@ let profileTriedAt = 0
 /* ------------------------------------------------------------------ *
  * 通用：交易规则与阶段
  * ------------------------------------------------------------------ */
-
-function limitRatioFor(code) {
-  if (/^(300|301|688)/.test(String(code))) return 0.2
-  if (/^[48]/.test(String(code))) return 0.3
-  return 0.1
-}
 
 function boardRuleLabel(code) {
   const ratio = limitRatioFor(code)
@@ -91,13 +94,36 @@ function auctionStage(market) {
       note: '尚未到 9:15。先看昨日主线与老龙头画像，竞价开始后再看真实资金态度。'
     }
   }
+  if (market.key === 'morning' || market.key === 'afternoon') {
+    return {
+      key: 'intraday',
+      label: '盘中实时',
+      active: true,
+      cancellable: false,
+      final: false,
+      intraday: true,
+      note: '盘中抓板看实时封板与近板强度，不做竞价撤单那套推演；封板确认只认买一贴在涨停价。'
+    }
+  }
+  if (market.key === 'lunch') {
+    return {
+      key: 'intraday',
+      label: '午间冻结',
+      active: true,
+      cancellable: false,
+      final: false,
+      intraday: true,
+      frozen: true,
+      note: '午间行情冻结，排名沿用上午收盘；13:00 后继续刷新，不在冻结时段做新决策。'
+    }
+  }
   return {
     key: 'off',
-    label: '非竞价时段',
+    label: '非交易时段',
     active: false,
     cancellable: true,
     final: false,
-    note: '当前不在集合竞价时段。竞价抓强只在 9:15–9:30 有效，其余时间不做事后拟合。'
+    note: '当前不在交易时段。竞价抓强只在 9:15–9:30 计算，盘中抓板只在 9:30–15:00 计算，其余时间不做事后拟合。'
   }
 }
 
@@ -478,94 +504,7 @@ function profileSummary(profile) {
   }
 }
 
-function findBucket(list, value) {
-  if (!Array.isArray(list) || value == null) return null
-  return list.find((b) => value >= b.min && value <= b.max) || null
-}
-
-function fitDragonCandidate({ stock, sector, profile, sentiment }) {
-  const s = stock || {}
-  const lbc = num(s.lbc, 0)
-  const minutes = sealMinutesFromOpen(s.firstSeal)
-  const sealRatio = num(s.sealRatio, 0)
-  const turnover = num(s.turnover, 0)
-  const capYi = num(s.floatCap, 0) / 1e8
-  const blowCount = num(s.blowCount, 0)
-  const todayCount = num(sector && sector.todayCount, 0)
-  const prevCount = num(sector && sector.prevCount, 0)
-
-  let score = 100
-  const hits = []
-  const misses = []
-  function rule(ok, hit, miss, penalty) {
-    if (ok) hits.push(hit)
-    else {
-      misses.push(miss)
-      score -= penalty
-    }
-  }
-
-  rule(lbc >= 3 && lbc <= 5, `高度 ${lbc} 板在 3–5 板区间`, lbc < 3 ? `高度 ${lbc} 板偏低` : `高度 ${lbc} 板偏高`, lbc < 3 ? 12 : 15)
-  rule(minutes <= 60, '首封在 10:30 前', '首封偏晚，主动性不足', 12)
-  rule(sealRatio >= 1, `封单占流通 ${round(sealRatio, 2)}%`, '封单偏薄，低于 1%', sealRatio < 0.5 ? 24 : 14)
-  rule(turnover >= 3 && turnover <= 20, `换手 ${round(turnover, 1)}% 处于良性区间`, turnover < 3 ? '换手过低，缺少分歧' : '换手过高，兑现压力大', turnover > 30 ? 24 : 12)
-  rule(capYi >= 50 && capYi <= 300, `流通 ${round(capYi, 0)} 亿适配`, capYi < 50 ? '流通盘偏小，波动与操控风险高' : '流通盘偏大，短线弹性弱', 10)
-  rule(blowCount === 0, '昨日无炸板', `昨日炸板 ${blowCount} 次`, Math.min(20, 8 + blowCount * 6))
-  rule(todayCount >= 3, `板块 ${todayCount} 家涨停`, `板块仅 ${todayCount} 家涨停，梯队不足`, 10)
-  rule(prevCount >= 2, `昨日板块 ${prevCount} 家涨停`, '昨日板块效应不足', 10)
-
-  if (sentiment && sentiment.phaseKey === 'ice') {
-    misses.push('市场情绪冰点，龙头也容易补跌')
-    score -= 12
-  } else if (sentiment && sentiment.phaseKey === 'ebb') {
-    misses.push('市场处于分歧退潮')
-    score -= 6
-  }
-
-  const staticScore = Math.round(clamp(score, 0, 100))
-  const evidence = []
-  const rates = []
-  if (profile && profile.buckets && profile.stats && profile.stats.continuedRate != null) {
-    const checks = [
-      { key: 'height', label: '高度', bucket: findBucket(profile.buckets.height, lbc), value: `${lbc} 板` },
-      { key: 'sealTime', label: '首封', bucket: findBucket(profile.buckets.sealTime, minutes), value: sealTimeLabel(s.firstSeal) },
-      { key: 'sealRatio', label: '封单', bucket: findBucket(profile.buckets.sealRatio, sealRatio), value: `${round(sealRatio, 2)}%` },
-      { key: 'turnover', label: '换手', bucket: findBucket(profile.buckets.turnover, turnover), value: `${round(turnover, 1)}%` },
-      { key: 'floatCap', label: '流通', bucket: findBucket(profile.buckets.floatCap, capYi), value: `${round(capYi, 0)} 亿` },
-      { key: 'sectorCount', label: '板块家数', bucket: findBucket(profile.buckets.sectorCount, todayCount), value: `${todayCount} 家` }
-    ]
-    for (const c of checks) {
-      if (!c.bucket || c.bucket.samples < 3 || c.bucket.rate == null) continue
-      evidence.push({
-        dimension: c.label,
-        value: c.value,
-        bucket: c.bucket.label,
-        samples: c.bucket.samples,
-        rate: c.bucket.rate,
-        avgGap: c.bucket.avgGap
-      })
-      rates.push(c.bucket.rate)
-    }
-  }
-  const avgRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : null
-  const empiricalScore =
-    avgRate == null
-      ? null
-      : Math.round(clamp(50 + (avgRate - profile.stats.continuedRate) * 1.8, 0, 100))
-  const finalScore =
-    empiricalScore == null
-      ? staticScore
-      : Math.round(clamp(staticScore * 0.62 + empiricalScore * 0.38, 0, 100))
-
-  return {
-    score: finalScore,
-    staticScore,
-    empiricalScore,
-    sampleEvidence: evidence.slice(0, 6),
-    hits,
-    misses: misses.slice(0, 5)
-  }
-}
+/* 画像匹配与弱转强已统一到 gene.js，edge.js 只保留编排逻辑 */
 
 /* ------------------------------------------------------------------ *
  * 盘前竞价
@@ -618,46 +557,155 @@ function priorSealScore(stock) {
 }
 
 function auctionLabel(status, stageKey) {
-  if (status === 'confirm' && stageKey === 'locked') return '竞价确认'
-  if (status === 'confirm' && stageKey === 'final') return '竞价强势'
-  if (status === 'confirm') return '仅观察'
-  if (status === 'watch') return '观察'
+  if (status === 'confirm') {
+    if (stageKey === 'intraday') return '封板确认'
+    if (stageKey === 'locked') return '竞价确认'
+    if (stageKey === 'final') return '竞价强势'
+    return '仅观察'
+  }
+  if (status === 'watch') return stageKey === 'intraday' ? '临板 / 跟踪' : '观察'
   return '剔除'
 }
 
+/* ------------------------------------------------------------------ *
+ * 准备池候选：选股结果 + 各主线板块龙头
+ * 选股分会被炸板 / 过热换手重罚，龙头可能因此掉出前 8；
+ * 准备池必须把板块最高板龙头找回来，并把罚分原因明示，而不是静默消失。
+ * ------------------------------------------------------------------ */
+
+function candidateUniverse(dashboard) {
+  const sectors = (dashboard.sectors && dashboard.sectors.all) || []
+  const sectorByKey = new Map(sectors.map((s) => [s.key, s]))
+  const entries = new Map()
+  const picks = dashboard.picks || []
+  const ordered = picks
+    .filter((p) => p && p.role !== 'mid')
+    .concat(picks.filter((p) => p && p.role === 'mid'))
+  for (const p of ordered) {
+    if (!p || !p.code || entries.has(p.code)) continue
+    entries.set(p.code, { stock: p, sector: sectorByKey.get(p.sectorKey) || null })
+  }
+  for (const sector of sectors) {
+    const leader = sector && sector.leader
+    if (!leader || !leader.code || entries.has(leader.code)) continue
+    const relevant = sector.dataReady || sector.group === 'main' || sector.group === 'new'
+    if (!relevant) continue
+    if (!(sector.maxBoard >= 2) && !sector.dataReady) continue
+    entries.set(leader.code, {
+      stock: {
+        ...leader,
+        sector: sector.name,
+        sectorKey: sector.key,
+        role: 'dragon',
+        roleLabel: sector.maxBoard >= 2 ? '板块龙头' : '首板先锋',
+        baseScore: Math.round(clamp(0.5 * (sector.heat || 40) + 38, 30, 92)),
+        fromSectorLeader: true
+      },
+      sector
+    })
+  }
+  return { entries: Array.from(entries.values()), sectorByKey }
+}
+
+/* 准备池排序：基因 42% + 基础分 22% + 板块热度 14% + 高度 10% + 弱转强 12% */
+function prepRank(entries, sentiment, profile) {
+  return entries
+    .filter((e) => e.stock && num(e.stock.price, null) != null)
+    .map((e) => {
+      const sector = e.sector
+      const gene =
+        e.stock.gene ||
+        geneScore({
+          stock: e.stock,
+          sector,
+          weak: e.stock.weak,
+          sentiment,
+          profile
+        })
+      const base = num(e.stock.baseScore != null ? e.stock.baseScore : e.stock.score, 60)
+      const heat = sector && sector.heat != null ? sector.heat : 40
+      const height = clamp((num(e.stock.lbc, 1) / 5) * 100, 0, 100)
+      const weakScore = gene.weak && gene.weak.score != null ? gene.weak.score : 50
+      const prepScore = Math.round(
+        clamp(
+          0.42 * gene.score + 0.22 * base + 0.14 * heat + 0.1 * height + 0.12 * weakScore,
+          0,
+          99
+        )
+      )
+      return { ...e, gene, prepScore }
+    })
+    .sort((a, b) => b.prepScore - a.prepScore)
+}
+
+/* 下一场竞价准备池：取最强 5 只，逐只解释入选原因与风险 */
 function buildPreview(dashboard, profile) {
-  const sectors = new Map((dashboard.sectors && dashboard.sectors.all ? dashboard.sectors.all : []).map((s) => [s.key, s]))
-  return (dashboard.picks || []).slice(0, 6).map((p) => {
-    const sector = sectors.get(p.sectorKey) || null
-    const fit = fitDragonCandidate({ stock: p, sector, profile, sentiment: dashboard.sentiment })
+  const sentiment = dashboard.sentiment
+  const ranked = prepRank(candidateUniverse(dashboard).entries, sentiment, profile)
+  return ranked.slice(0, 5).map(({ stock: p, sector, gene, prepScore }, i) => {
+    const fit = gene.fit
+    const close = num(p.price, null)
+    const limitRatio = limitRatioFor(p.code)
+    const limitUp = close == null ? null : round(close * (1 + limitRatio), 2)
+    const base = num(p.baseScore != null ? p.baseScore : p.score, 60)
+    const heat = sector && sector.heat != null ? sector.heat : null
+    const acceptable =
+      !!(sector && sector.dataReady) &&
+      fit.score >= 55 &&
+      num(p.score, 0) >= 65 &&
+      p.lbc >= 2 &&
+      p.lbc <= 5 &&
+      !(p.blowCount > 0)
+    const why = [
+      `准备池 ${prepScore} 分：基因 ${gene.score} / 基础 ${base} / 热度 ${heat == null ? '--' : heat} / 弱转强 ${gene.weak ? gene.weak.label : '--'}`,
+      ...(p.fromSectorLeader
+        ? [`${sector ? sector.name : p.sector || '板块'} ${p.lbc} 板龙头，选股分被炸板 / 换手惩罚后仍纳入准备池核验`]
+        : []),
+      ...(gene.why || [])
+    ]
     return {
+      rank: i + 1,
       code: p.code,
       name: p.name,
-      sector: p.sector,
+      sector: p.sector || (sector ? sector.name : null),
       sectorKey: p.sectorKey,
       role: p.role,
       roleLabel: p.roleLabel,
       lbc: p.lbc,
-      price: p.price,
-      score: p.score,
-      observation: p.observation,
+      price: close,
+      limitRatio,
+      boardRule: boardRuleLabel(p.code),
+      limitUp,
+      score: num(p.score, 0),
+      baseScore: base,
+      prepScore,
+      geneScore: gene.score,
+      weak: p.weak || gene.weak || null,
+      weakLabel: gene.weakLabel,
+      observation: !acceptable,
+      acceptable,
       firstSealLabel: p.firstSealLabel,
       sealRatio: p.sealRatio,
       turnover: p.turnover,
       floatCap: p.floatCap,
-      heat: sector ? sector.heat : null,
+      heat,
       dataReady: !!(sector && sector.dataReady),
       tags: [
-        ...(p.observation ? ['观察池'] : []),
-        ...(sector && sector.dataReady ? ['三关通过'] : []),
+        ...(acceptable ? ['隔夜候选'] : ['观察池']),
+        ...(gene.tags || []),
         ...(p.roleLabel ? [p.roleLabel] : [])
-      ],
+      ]
+        .filter((v, idx, arr) => arr.indexOf(v) === idx)
+        .slice(0, 5),
+      factors: gene.factors,
+      why: why.slice(0, 7),
+      risks: gene.risks,
       fit,
       plan: [
-        '竞价涨幅 +2% ~ +8% 才进入强势观察',
-        '竞价额至少 2000 万，且不低于昨日成交额 2%',
-        '同板块至少 2 只同步高开，才算板块共振',
-        '9:20 前可撤单只观察，9:20 后再确认'
+        '明日竞价高开 1%–4% 才执行；高于 6% 放弃，低于 -2% 放弃',
+        '竞价额不低于今日成交 3%，同板块至少 1 只核心同步高开',
+        `涨停价参考 ${limitUp == null ? '--' : limitUp}（${boardRuleLabel(p.code)}），只挂条件单，不追一字`,
+        '催化未核验不下单；开盘跌破分时均线先退出'
       ]
     }
   })
@@ -674,6 +722,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   const sectorByKey = new Map(
     (dashboard.sectors && dashboard.sectors.all ? dashboard.sectors.all : []).map((s) => [s.key, s])
   )
+  const sectorList = (dashboard.sectors && dashboard.sectors.all) || []
 
   if (!stage.active) {
     return {
@@ -690,6 +739,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       },
       gate: dashboard.gate,
       active: false,
+      intraday: false,
       universe: pool.length,
       strongCount: 0,
       watchCount: 0,
@@ -697,11 +747,48 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       preview: buildPreview(dashboard, profile),
       notes: [
         stage.note,
-        '非竞价时段不计算竞价分，避免把盘中涨幅伪装成集合竞价强度。',
-        profile ? '下方观察池已叠加老龙头画像匹配，仅用于下一场竞价前的准备。' : '老龙头画像尚未就绪，当前只展示基础条件。'
+        '非交易时段不计算竞价 / 盘中分，避免把历史涨幅伪装成实时强度。',
+        '下方准备池按弱转强、板块地位、封板质量与历史画像选最强 5 只，用于下一场竞价前准备。',
+        profile ? '准备池已叠加老龙头画像匹配；画像只是样本统计，不是准确率。' : '老龙头画像尚未就绪，当前只展示基础条件。'
       ],
-      source: '东方财富涨停池 + 腾讯行情；竞价评分只在 9:15–9:30 启用'
+      source: '东方财富涨停池 + 腾讯行情；竞价 9:15–9:30 / 盘中 9:30–15:00 计算'
     }
+  }
+
+  /* 弱转强上下文：盘中比较今日与昨日；竞价阶段最新池本身就是昨日涨停 */
+  let weakCtx
+  if (stage.intraday) {
+    const prev = dashboard.prevContext
+    weakCtx = buildWeakContext({
+      prevPool: (prev && prev.zt) || [],
+      prevBlow: (prev && prev.blow) || [],
+      prevDown: (prev && prev.down) || []
+    })
+  } else if (latest) {
+    const [zbRes, dtRes] = await Promise.allSettled([
+      getPool(latest.date, 'zb'),
+      getPool(latest.date, 'dt')
+    ])
+    weakCtx = buildWeakContext({
+      prevPool: pool,
+      prevBlow: zbRes.status === 'fulfilled' ? zbRes.value.items || [] : [],
+      prevDown: dtRes.status === 'fulfilled' ? dtRes.value.items || [] : []
+    })
+  } else {
+    weakCtx = buildWeakContext({})
+  }
+
+  function matchSectorLoose(name) {
+    if (!name) return null
+    const direct = sectorByName.get(name)
+    if (direct) return direct
+    const n = stripLevel(name)
+    if (!n) return null
+    for (const s of sectorList) {
+      const sn = stripLevel(s.name)
+      if (sn && (sn.includes(n) || n.includes(sn))) return s
+    }
+    return null
   }
 
   const map = new Map()
@@ -720,7 +807,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       price: stock.price,
       turnover: stock.turnover,
       amount: stock.amount,
-      prevAmount: stock.amount,
+      prevAmount: stage.intraday ? null : stock.amount,
       floatCap: stock.floatCap,
       sealRatio: round(sealRatio, 2),
       sealFund: stock.sealFund,
@@ -729,6 +816,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       blowCount: stock.blowCount,
       ztDays: stock.ztDays,
       fromPool: true,
+      sectorRef: sector,
       sectorHeat: sector ? sector.heat : null,
       sectorGroup: sector ? sector.group : null,
       sectorReady: !!(sector && sector.dataReady),
@@ -759,6 +847,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       blowCount: 0,
       ztDays: 0,
       fromPool: false,
+      sectorRef: sector,
       sectorHeat: sector.heat,
       sectorGroup: sector.group,
       sectorReady: !!sector.dataReady,
@@ -767,8 +856,52 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     })
   }
 
+  if (stage.active) {
+    try {
+      const scan = await scanMarketLeaders(80)
+      for (const q of scan.items || []) {
+        if (!q.code || map.has(q.code)) continue
+        if (!/^\d{6}$/.test(q.code)) continue
+        const industry = q.industry || ''
+        const sector = matchSectorLoose(industry)
+        map.set(q.code, {
+          code: q.code,
+          secid: q.secid || `${/^6/.test(q.code) ? 1 : 0}.${q.code}`,
+          name: q.name || q.code,
+          industry,
+          sector: sector ? sector.name : industry || '未分类',
+          sectorKey: sector ? sector.key : null,
+          lbc: 0,
+          price: q.price,
+          turnover: q.turnover,
+          amount: q.amount,
+          prevAmount: null,
+          floatCap: q.floatCap,
+          sealRatio: 0,
+          sealFund: 0,
+          firstSeal: 0,
+          firstSealLabel: '--:--',
+          blowCount: 0,
+          ztDays: 0,
+          fromPool: false,
+          scanned: true,
+          sectorRef: sector,
+          sectorHeat: sector ? sector.heat : null,
+          sectorGroup: sector ? sector.group : null,
+          sectorReady: !!(sector && sector.dataReady),
+          sectorTodayCount: sector ? sector.todayCount : null,
+          sectorPrevCount: sector ? sector.prevCount : null
+        })
+      }
+    } catch (err) {
+      /* 全市场扫描失败时仍保留涨停池与主线候选，不阻断抓板页 */
+    }
+  }
+
+  /* 盘中 / 竞价定稿需要涨停价与买一量，腾讯五档随批次合并；其它阶段用轻量行情 */
+  const needSeal = !!stage.intraday || stage.key === 'final'
   const list = Array.from(map.values())
-  const quoteResult = await batchQuotes(list.map((x) => x.secid))
+  const quoteResult = await batchQuotes(list.map((x) => x.secid), { seal: needSeal })
   const qMap = new Map((quoteResult.items || []).map((q) => [q.code, q]))
   const live = []
   for (const c of list) {
@@ -780,6 +913,17 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     const amountRatio = prevAmount > 0 && amount != null ? (amount / prevAmount) * 100 : null
     const floatCap = q.floatCap != null ? q.floatCap : c.floatCap
     const price = q.price != null ? q.price : c.price
+    const limitUp =
+      q.limitUp != null
+        ? q.limitUp
+        : q.prevClose != null
+          ? round(q.prevClose * (1 + limitRatioFor(c.code)), 2)
+          : null
+    const sealFund = q.sealFund != null ? q.sealFund : c.sealFund
+    const sealRatio =
+      sealFund != null && floatCap > 0
+        ? round((sealFund / floatCap) * 100, 2)
+        : round(c.sealRatio || 0, 2)
     live.push({
       ...c,
       name: q.name || c.name,
@@ -794,15 +938,23 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       high: q.high,
       low: q.low,
       prevClose: q.prevClose,
-      limitUp: q.limitUp,
+      limitUp,
+      limitDown: q.limitDown != null ? q.limitDown : null,
+      sealed: !!q.sealed,
+      bid1: q.bid1,
+      bid1Vol: q.bid1Vol,
+      sealFund,
+      sealRatio,
       quoteSource: q.source || ''
     })
   }
 
   const sectorLiveStrong = new Map()
   for (const c of live) {
-    if (c.pct != null && c.pct >= 2 && c.amount != null && c.amount >= 1e7) {
-      sectorLiveStrong.set(c.sector, (sectorLiveStrong.get(c.sector) || 0) + 1)
+    const hot = stage.intraday ? c.pct != null && c.pct >= 5 : c.pct != null && c.pct >= 2
+    if (hot && c.amount != null && c.amount >= 1e7) {
+      const key = c.sector || c.industry || '未分类'
+      sectorLiveStrong.set(key, (sectorLiveStrong.get(key) || 0) + 1)
     }
   }
 
@@ -810,84 +962,154 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   for (const c of live) {
     if (c.pct == null) continue
     const pct = c.pct
-    const amountScore = auctionAmountScore(c.amount, c.amountRatio)
-    const pScore = auctionPctScore(pct)
-    const prior = sectorPriorScore({
-      dataReady: c.sectorReady,
-      group: c.sectorGroup
-    })
-    const liveStrong = sectorLiveStrong.get(c.sector) || 0
-    const sectorScore = clamp(prior + (liveStrong >= 2 ? 12 : liveStrong >= 1 ? 6 : 0), 0, 100)
-    const sealScore = c.fromPool ? priorSealScore(c) : 45
-    const fit = fitDragonCandidate({
+    const limitPct = limitRatioFor(c.code) * 100
+    const gapToLimit = round(limitPct - pct, 2)
+    const nearLimit = gapToLimit <= 1.2 && gapToLimit >= -0.6
+    const sealedNow =
+      !!c.sealed ||
+      (c.limitUp != null && c.price != null && Math.abs(c.price - c.limitUp) < 0.005)
+    const sector = c.sectorRef || sectorByKey.get(c.sectorKey) || null
+    const liveStrong = sectorLiveStrong.get(c.sector || c.industry || '未分类') || 0
+    const weak = weakForCode(
+      c.code,
+      weakCtx,
+      stage.intraday ? { code: c.code, lbc: c.lbc } : { code: c.code, lbc: 0 }
+    )
+    const gene = geneScore({
       stock: c,
-      sector: sectorByKey.get(c.sectorKey),
+      sector,
+      weak,
+      sentiment: dashboard.sentiment,
       profile,
-      sentiment: dashboard.sentiment
+      context: {
+        intraday: !!stage.intraday,
+        sealed: stage.intraday ? sealedNow : undefined,
+        pct,
+        limitPct,
+        amountRatio: c.amountRatio
+      }
     })
-    const factor = phaseFactor(dashboard.sentiment && dashboard.sentiment.phaseKey)
-    const base =
-      0.3 * pScore +
-      0.28 * amountScore +
-      0.24 * sectorScore +
-      0.18 * sealScore
-    let score = base * factor * 0.9 + fit.score * 0.1
-    if (!c.fromPool) score = Math.min(score, 82)
-    score = Math.round(clamp(score, 0, 99))
+
+    let score
+    if (stage.intraday) {
+      const near = clamp(100 - Math.max(0, gapToLimit) * 16, 0, 100)
+      const vol = c.volRatio != null ? clamp(c.volRatio * 22, 0, 100) : 50
+      const amtPart = auctionAmountScore(c.amount, null)
+      const strength = clamp(near * 0.5 + vol * 0.25 + amtPart * 0.25, 0, 100)
+      score = Math.round(clamp(strength * 0.62 + gene.score * 0.38, 0, 99))
+      if (sealedNow) score = Math.max(score, Math.min(99, gene.score + 2))
+    } else {
+      const amountScore = auctionAmountScore(c.amount, c.amountRatio)
+      const pScore = auctionPctScore(pct)
+      const prior = sectorPriorScore({ dataReady: c.sectorReady, group: c.sectorGroup })
+      const sectorScore = clamp(prior + (liveStrong >= 2 ? 12 : liveStrong >= 1 ? 6 : 0), 0, 100)
+      const sealScore = c.fromPool ? priorSealScore(c) : 45
+      const factor = phaseFactor(dashboard.sentiment && dashboard.sentiment.phaseKey)
+      const base = 0.3 * pScore + 0.28 * amountScore + 0.24 * sectorScore + 0.18 * sealScore
+      score = Math.round(clamp(base * factor * 0.72 + gene.score * 0.28, 0, 99))
+      if (!c.fromPool) score = Math.min(score, 82)
+      if (stage.key === 'final' && sealedNow) {
+        score = Math.max(score, Math.min(96, gene.score + 2))
+      }
+    }
 
     let status = 'drop'
-    if (
-      score >= 72 &&
-      pct >= 2 &&
-      pct <= 8 &&
-      amountScore >= 60 &&
-      c.amount != null &&
-      c.amount >= 2e7 &&
-      c.amountRatio != null &&
-      c.amountRatio >= 2 &&
-      liveStrong >= 2 &&
-      c.sectorReady &&
-      c.fromPool
-    ) {
-      status = 'confirm'
-    } else if (score >= 55 && pct >= 0.5) {
-      status = 'watch'
-    }
-    if (stage.key === 'trial' && status === 'confirm') {
-      status = 'watch'
+    if (stage.intraday) {
+      if (sealedNow && (c.fromPool || c.sectorReady || gene.score >= 60)) {
+        status = 'confirm'
+      } else if (nearLimit || (pct >= 5 && gene.score >= 55)) {
+        status = 'watch'
+      }
+    } else {
+      const auctionHard =
+        pct >= 2 &&
+        pct <= 8 &&
+        c.amount != null &&
+        c.amount >= 2e7 &&
+        c.amountRatio != null &&
+        c.amountRatio >= 2 &&
+        liveStrong >= 2 &&
+        c.sectorReady &&
+        c.fromPool
+      if (score >= 70 && auctionHard) status = 'confirm'
+      else if (stage.key === 'final' && sealedNow && c.amount != null && c.amount >= 1e7) status = 'confirm'
+      else if (score >= 55 && pct >= 0.5) status = 'watch'
+      if (stage.key === 'trial' && status === 'confirm') status = 'watch'
     }
 
     const reasons = []
-    reasons.push(`竞价 ${pct > 0 ? '+' : ''}${round(pct, 2)}%`)
-    if (c.amount != null) {
+    if (stage.intraday) {
+      if (sealedNow) {
+        reasons.push(`已封板${c.sealFund ? ` · 封单 ${amountText(c.sealFund)}` : ''}`)
+      } else {
+        reasons.push(
+          `实时 ${pct > 0 ? '+' : ''}${round(pct, 2)}% · 距涨停 ${Math.max(0, gapToLimit).toFixed(1)} 个点`
+        )
+      }
+      if (c.volRatio != null) reasons.push(`量比 ${round(c.volRatio, 2)}`)
+      else if (c.amount != null) reasons.push(`成交 ${amountText(c.amount)}`)
+    } else {
+      reasons.push(`竞价 ${pct > 0 ? '+' : ''}${round(pct, 2)}%`)
+      if (c.amount != null) {
+        reasons.push(
+          `竞价额 ${amountText(c.amount)}${c.amountRatio != null ? `，占昨日成交 ${round(c.amountRatio, 1)}%` : ''}`
+        )
+      }
+    }
+    if (c.sector) {
       reasons.push(
-        `竞价额 ${amountText(c.amount)}${c.amountRatio != null ? `，占昨日成交 ${round(c.amountRatio, 1)}%` : ''}`
+        `「${c.sector}」${c.sectorTodayCount != null ? `今 ${c.sectorTodayCount} 家涨停` : '板块候选'}` +
+          `${c.sectorReady ? ' · 三关通过' : ''}`
       )
     }
-    if (c.sector) reasons.push(`「${c.sector}」${c.sectorTodayCount != null ? `昨日 ${c.sectorTodayCount} 家涨停` : '板块候选'}`)
-    if (c.fromPool) reasons.push(`昨日 ${c.lbc} 板 · ${c.firstSealLabel} 首封 · 封单 ${round(c.sealRatio, 2)}%`)
-    if (liveStrong >= 2) reasons.push(`同板块 ${liveStrong} 只竞价额超千万且高开 2% 以上`)
+    if (c.fromPool) {
+      reasons.push(`昨日 ${c.lbc} 板 · ${c.firstSealLabel} 首封 · 封单 ${round(c.sealRatio, 2)}%`)
+    }
+    if (liveStrong >= 2) {
+      reasons.push(
+        `同板块 ${liveStrong} 只${stage.intraday ? '涨幅居前且成交超千万' : '竞价额超千万且高开 2% 以上'}`
+      )
+    }
+    if (weak && weak.kind !== 'fresh') reasons.push(`弱转强：${weak.detail}`)
+    reasons.push(
+      ...gene.why.filter((w) => !w.startsWith('「') && !w.startsWith('实时 ')).slice(0, 2)
+    )
 
     const risks = []
-    if (pct > 8) risks.push('竞价高开超过 8%，追高容错低')
-    if (pct < 0) risks.push('竞价翻绿，资金态度偏弱')
-    if (c.amountRatio != null && c.amountRatio < 2) risks.push('竞价额不足昨日成交 2%')
-    if (c.amount != null && c.amount < 2e7) risks.push('竞价额不足 2000 万，流动性不够')
+    if (stage.intraday) {
+      if (!sealedNow) risks.push('尚未封板，冲板失败回落风险')
+      if (sealedNow && c.sealFund != null && c.sealFund < 2e7) risks.push('封单不足 2000 万，容易开板')
+      if (!sealedNow && gapToLimit > 0 && gapToLimit <= 1.2) risks.push('贴板但未封，最后一档抛压需观察')
+      if (sealedNow && c.blowCount > 0) risks.push(`今日已炸板 ${c.blowCount} 次`)
+    } else {
+      if (pct > 8) risks.push('竞价高开超过 8%，追高容错低')
+      if (pct < 0) risks.push('竞价翻绿，资金态度偏弱')
+      if (c.amountRatio != null && c.amountRatio < 2) risks.push('竞价额不足昨日成交 2%')
+      if (c.amount != null && c.amount < 2e7) risks.push('竞价额不足 2000 万，流动性不够')
+      if (stage.key === 'trial') risks.push('9:20 前可撤单，虚假挂单风险高')
+    }
     if (liveStrong < 2) risks.push('同板块共振不足 2 只，可能只是孤军')
     if (!c.sectorReady) risks.push('板块三关未过，只能观察，不构成隔夜依据')
     if (c.lbc >= 5) risks.push('高位股，分歧时波动放大')
     if (c.blowCount > 0) risks.push(`昨日炸板 ${c.blowCount} 次`)
-    if (c.lbc === 0) risks.push('非昨日涨停池成员，缺少封板质量数据')
-    if (stage.key === 'trial') risks.push('9:20 前可撤单，虚假挂单风险高')
+    if (!c.fromPool) risks.push('非涨停池成员，缺少昨日封板质量数据')
+    risks.push(...(gene.risks || []).slice(0, 2))
 
     const tags = []
-    if (pct >= 2 && pct <= 7) tags.push('竞价强势')
-    if (c.amountRatio != null && c.amountRatio >= 5) tags.push('竞价放量')
+    if (stage.intraday) {
+      if (sealedNow) tags.push('已封板')
+      else if (nearLimit) tags.push('临近涨停')
+      if (c.volRatio != null && c.volRatio >= 1.5) tags.push('盘中放量')
+    } else {
+      if (pct >= 2 && pct <= 7) tags.push('竞价强势')
+      if (c.amountRatio != null && c.amountRatio >= 5) tags.push('竞价放量')
+    }
     if (liveStrong >= 2) tags.push('板块共振')
     if (c.fromPool && c.lbc >= 3) tags.push('昨日高位')
     if (c.sectorReady) tags.push('三关通过')
-    if (!c.fromPool) tags.push('非涨停池')
-    if (fit.score >= 70) tags.push('画像匹配')
+    if (!c.fromPool) tags.push(c.scanned ? '全市场扫描' : '非涨停池')
+    if (weak && weak.score >= 66) tags.push(weak.label)
+    tags.push(...(gene.tags || []))
 
     strong.push({
       code: c.code,
@@ -896,41 +1118,73 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       sector: c.sector,
       sectorKey: c.sectorKey,
       sectorHeat: c.sectorHeat,
+      industry: c.industry || '',
       lbc: c.lbc,
       fromPool: c.fromPool,
+      scanned: !!c.scanned,
       price: c.price,
       pct,
+      limitPct,
+      gapToLimit,
+      limitUp: c.limitUp,
+      boardRule: boardRuleLabel(c.code),
       amount: c.amount,
       amountRatio: c.amountRatio,
       volRatio: c.volRatio,
       quoteTime: c.quoteTime,
       firstSealLabel: c.firstSealLabel,
       sealRatio: round(c.sealRatio, 2),
-      turnover: c.fromPool ? round(c.turnover, 2) : null,
+      sealFund: c.sealFund == null ? null : c.sealFund,
+      sealed: sealedNow,
+      bid1: c.bid1,
+      bid1Vol: c.bid1Vol,
+      turnover: c.turnover != null ? round(c.turnover, 2) : null,
       blowCount: c.blowCount,
       score,
+      geneScore: gene.score,
       status,
       statusLabel: auctionLabel(status, stage.key),
-      tags,
-      reasons: reasons.slice(0, 5),
-      risks: risks.slice(0, 4),
-      fit,
-      source: c.fromPool ? '昨日涨停池' : '主线领涨股'
+      weak: weak || null,
+      weakLabel: weak ? weak.label : '',
+      tags: Array.from(new Set(tags)).slice(0, 6),
+      reasons: reasons.slice(0, 6),
+      risks: Array.from(new Set(risks)).slice(0, 5),
+      factors: gene.factors,
+      why: gene.why,
+      fit: gene.fit,
+      source: c.fromPool
+        ? stage.intraday
+          ? '今日涨停池'
+          : '昨日涨停池'
+        : c.scanned
+          ? '全市场扫描'
+          : '主线领涨股'
     })
   }
 
   strong.sort((a, b) => b.score - a.score)
-  const top = strong.filter((x) => x.status !== 'drop').slice(0, 12)
+  const top = strong
+    .filter((x) => x.status !== 'drop')
+    .slice(0, 5)
+    .map((x, i) => ({ ...x, rank: i + 1 }))
   const strongCount = top.filter((x) => x.status === 'confirm').length
   const watchCount = top.filter((x) => x.status === 'watch').length
 
   const notes = [stage.note]
-  notes.push(
-    '竞价确认硬条件：涨幅 +2% ~ +8%、竞价额 ≥ 2000 万且 ≥ 昨日成交 2%、同板块至少 2 只强势、板块三关通过；9:20 前只算试撮。'
-  )
-  if (!profile) notes.push('老龙头画像尚未构建完成，本次竞价分只使用基础规则。')
+  if (stage.intraday) {
+    notes.push(
+      '盘中排序：封板确认 → 近板强度 → 板块共振 → 弱转强 → 封板质量 / 历史画像；只列最强 5 只。'
+    )
+    notes.push('封板确认只认最新价与买一价都贴在涨停价；未封板一律按观察处理，不当作已经涨停。')
+  } else {
+    notes.push(
+      '竞价确认硬条件：涨幅 +2% ~ +8%、竞价额 ≥ 2000 万且 ≥ 昨日成交 2%、同板块至少 2 只强势、板块三关通过；9:20 前只算试撮。'
+    )
+  }
+  if (!profile) notes.push('老龙头画像尚未构建完成，本次评分只使用基础规则。')
   if (stage.key === 'trial') notes.push('试撮阶段的数据会撤单、重挂，任何结论都必须等到 9:20 之后复核。')
   if (stage.key === 'final') notes.push('竞价定稿后仍需看 9:30 后是否放量承接；高开低走按失败处理。')
+  if (stage.frozen) notes.push('午间冻结：价格不再变化，13:00 后再看资金是否继续。')
   if (quoteResult.stale) notes.push('行情返回了缓存快照，请留意时间戳。')
 
   return {
@@ -939,6 +1193,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     market,
     stage,
     active: true,
+    intraday: !!stage.intraday,
     tradeDate: latest ? latest.date : dashboard.tradeDate,
     tradeDateLabel: latest ? normalizeDateLabel(latest.date) : dashboard.tradeDateLabel,
     sentiment: {
@@ -948,13 +1203,16 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     },
     gate: dashboard.gate,
     universe: live.length,
+    scanUniverse: live.filter((x) => x.scanned).length,
     strongCount,
     watchCount,
     candidates: top,
     preview: [],
     notes,
     quoteAt: quoteResult.at,
-    source: '东方财富涨停池 + 腾讯实时行情；2 秒轮询，9:15–9:30 启用'
+    source: stage.intraday
+      ? '东方财富全市场涨幅榜 + 涨停池 + 腾讯五档；约 2 秒轮询，仅交易时段计算'
+      : '东方财富涨停池 + 全市场扫描 + 腾讯行情；约 2 秒轮询，竞价 9:15–9:30 计算'
   }
 }
 
@@ -986,8 +1244,6 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
   const phase = dashboard.sentiment ? dashboard.sentiment.phase : null
   const dataReady = (dashboard.sectors && dashboard.sectors.counts && dashboard.sectors.counts.dataReady) || 0
   const sectors = (dashboard.sectors && dashboard.sectors.all) || []
-  const picks = dashboard.picks || []
-  const readySectors = sectors.filter((s) => s.dataReady).sort((a, b) => b.heat - a.heat)
 
   let status = 'empty'
   let statusLabel = '不挂隔夜单'
@@ -1020,56 +1276,106 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     reason = `${dataReady} 个板块通过三关，情绪处于「${phase ? phase.label : '修复'}」。只做通过画像核验的核心，催化仍须你人工确认后才能挂条件单。`
   }
 
-  const candidates = []
-  for (const sector of readySectors.slice(0, 3)) {
-    const pool = picks
-      .filter((p) => p.sectorKey === sector.key && p.lbc >= 2 && p.role !== 'mid')
-      .sort((a, b) => b.score - a.score)
-    let stock = pool[0] || null
-    if (!stock && sector.leader && sector.leader.lbc >= 2) {
-      stock = {
-        ...sector.leader,
-        sector: sector.name,
-        sectorKey: sector.key,
-        role: 'dragon',
-        roleLabel: '板块龙头',
-        score: Math.round(0.55 * sector.heat + 35),
-        observation: false
-      }
-    }
-    if (!stock) continue
-    const fit = fitDragonCandidate({
-      stock,
-      sector,
-      profile,
-      sentiment: dashboard.sentiment
-    })
+  const basePlan = {
+    gapLow: 1,
+    gapHigh: 4,
+    cancelAbove: 6,
+    abandonBelow: -2,
+    trigger: [
+      '竞价高开 1%–4%，且 9:20 后价格不回落',
+      '同板块至少 1 只核心同步高开，不能孤军',
+      '竞价额不低于今日成交额 3%，且不是一字无量',
+      '催化已核验（政策 / 产业 / 事件），纯传闻直接放弃'
+    ],
+    invalid: [
+      '低开超过 -2%，或高开后 9:25 前跌回平盘',
+      '板块无共振、核心股竞价集体走弱',
+      '开盘 10 分钟跌破分时均线且无承接',
+      '触发高位爆量或炸板不回封'
+    ],
+    stop: '跌破昨收 -3% 或分时均线持续走弱，先退出再复盘。',
+    position: '单票 ≤ 10%，隔夜总仓 ≤ 30%；没有催化核验则不下单。'
+  }
+
+  function toOvernightItem(stock, sector, geneIn = null, prepScoreIn = null) {
+    const sectorObj = sector || null
+    const gene =
+      stock.gene ||
+      geneIn ||
+      geneScore({
+        stock,
+        sector: sectorObj,
+        weak: stock.weak,
+        sentiment: dashboard.sentiment,
+        profile
+      })
     const close = num(stock.price, null)
-    if (close == null) continue
+    if (close == null) return null
     const limitRatio = limitRatioFor(stock.code)
     const limitUp = round(close * (1 + limitRatio), 2)
-    const baseScore = num(stock.score, 60)
+    const baseScore = num(stock.baseScore != null ? stock.baseScore : stock.score, 60)
+    const heat = sectorObj && sectorObj.heat != null ? sectorObj.heat : 40
     const overnightScore = Math.round(
-      clamp(0.56 * baseScore + 0.3 * fit.score + 0.14 * sector.heat, 0, 99)
+      clamp(0.5 * baseScore + 0.3 * gene.score + 0.2 * heat, 0, 99)
     )
+    const sectorReady = !!(sectorObj && sectorObj.dataReady)
     const acceptable =
-      fit.score >= 55 &&
+      sectorReady &&
+      gene.fit.score >= 55 &&
       overnightScore >= 65 &&
       stock.lbc >= 2 &&
       stock.lbc <= 5 &&
       !(stock.blowCount > 0)
+
     const tags = []
-    if (fit.score >= 70) tags.push('画像匹配')
-    if (sector.heat >= 65) tags.push('主线热度')
+    if (acceptable) tags.push('隔夜候选')
+    if (gene.fit.score >= 70) tags.push('画像匹配')
+    if (gene.weak && gene.weak.score >= 66) tags.push(gene.weak.label)
+    if (heat >= 65) tags.push('主线热度')
     if (stock.lbc === 2) tags.push('二板确认')
     if (stock.lbc >= 4) tags.push('高位加速')
     if (stock.blowCount > 0) tags.push('炸板瑕疵')
 
-    candidates.push({
+    const prepScore =
+      prepScoreIn != null
+        ? prepScoreIn
+        : Math.round(
+            clamp(
+              0.42 * gene.score +
+                0.22 * baseScore +
+                0.14 * heat +
+                0.1 * clamp((num(stock.lbc, 1) / 5) * 100, 0, 100) +
+                0.12 * (gene.weak && gene.weak.score != null ? gene.weak.score : 50),
+              0,
+              99
+            )
+          )
+    const why = Array.from(
+      new Set([
+        `准备池 ${prepScore} 分：基因 ${gene.score} / 基础 ${baseScore} / 板块热度 ${heat} / 弱转强 ${gene.weak ? gene.weak.label : '--'}`,
+        ...(stock.fromSectorLeader
+          ? [`${sectorObj ? sectorObj.name : stock.sector || '板块'} ${stock.lbc} 板龙头，选股分被炸板 / 换手惩罚后仍纳入准备池核验`]
+          : []),
+        ...(gene.why || []),
+        `隔夜评分 ${overnightScore}：基础 ${baseScore} / 基因 ${gene.score} / 板块热度 ${heat}`,
+        ...(acceptable ? ['三关 + 画像 + 情绪条件同时满足，进入严格候选'] : [])
+      ])
+    )
+    const risks = Array.from(
+      new Set([
+        ...(gene.risks || []),
+        ...(stock.blowCount > 0 ? [`昨日炸板 ${stock.blowCount} 次`] : []),
+        ...(stock.lbc >= 5 ? ['高位连板，分歧波动放大'] : []),
+        ...(sectorReady ? [] : ['板块三关未过或缺失，只能观察']),
+        '隔夜存在跳空风险，条件单不是保本工具'
+      ])
+    )
+
+    return {
       code: stock.code,
       name: stock.name,
-      sector: sector.name,
-      sectorKey: sector.key,
+      sector: sectorObj ? sectorObj.name : stock.sector,
+      sectorKey: stock.sectorKey,
       role: stock.role,
       roleLabel: stock.roleLabel,
       lbc: stock.lbc,
@@ -1079,53 +1385,40 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       limitUp,
       score: overnightScore,
       baseScore,
-      fit,
-      sectorHeat: sector.heat,
+      prepScore,
+      geneScore: gene.score,
+      fit: gene.fit,
+      factors: gene.factors,
+      sectorHeat: heat,
+      dataReady: sectorReady,
       observation: !acceptable,
       acceptable,
-      tags,
-      plan: {
-        gapLow: 1,
-        gapHigh: 4,
-        cancelAbove: 6,
-        abandonBelow: -2,
-        trigger: [
-          '竞价高开 1%–4%，且 9:20 后价格不回落',
-          '同板块至少 1 只核心同步高开，不能孤军',
-          '竞价额不低于昨日成交额 3%，且不是一字无量',
-          '催化已核验（政策 / 产业 / 事件），纯传闻直接放弃'
-        ],
-        invalid: [
-          '低开超过 -2%，或高开后 9:25 前跌回平盘',
-          '板块无共振、核心股竞价集体走弱',
-          '开盘 10 分钟跌破分时均线且无承接',
-          '触发高位爆量或炸板不回封'
-        ],
-        stop: '跌破昨收 -3% 或分时均线持续走弱，先退出再复盘。',
-        position: '单票 ≤ 10%，隔夜总仓 ≤ 30%；没有催化核验则不下单。'
-      },
-      reasons: [
-        `「${sector.name}」热度 ${sector.heat}，三关通过`,
-        `昨日 ${stock.lbc} 板 · ${stock.firstSealLabel || '--:--'} 首封 · 封单 ${round(stock.sealRatio, 2)}%`,
-        `老龙头画像匹配 ${fit.score} 分（基础 ${fit.staticScore} / 样本 ${fit.empiricalScore == null ? '--' : fit.empiricalScore}）`,
-        `隔夜评分 ${overnightScore}，${acceptable ? '进入候选' : '未达严格条件'}`
-      ],
-      risks: [
-        ...(stock.blowCount > 0 ? [`昨日炸板 ${stock.blowCount} 次`] : []),
-        ...(stock.lbc >= 5 ? ['高位连板，分歧波动放大'] : []),
-        ...(fit.misses || []).slice(0, 2),
-        '隔夜存在跳空风险，条件单不是保本工具'
-      ].slice(0, 4),
+      weak: stock.weak || gene.weak || null,
+      weakLabel: gene.weakLabel,
+      firstSealLabel: stock.firstSealLabel || '--:--',
+      sealRatio: round(stock.sealRatio, 2),
+      turnover: stock.turnover != null ? round(stock.turnover, 2) : null,
+      tags: Array.from(new Set(tags)).slice(0, 5),
+      why: why.slice(0, 6),
+      reasons: why.slice(0, 6),
+      risks: risks.slice(0, 5),
+      plan: basePlan,
       requiresCatalyst: true
-    })
+    }
   }
 
-  candidates.sort((a, b) => b.score - a.score)
-  const recommendations = candidates.filter((c) => c.acceptable)
-  const watchlist = candidates.filter((c) => !c.acceptable)
-  if (mode.key === 'locked' || mode.key === 'preview') {
-    // 预演/盘前只展示计划候选，不把“可挂”写死
-  }
+  const ranked = prepRank(candidateUniverse(dashboard).entries, dashboard.sentiment, profile)
+  const allItems = ranked
+    .map((e) => toOvernightItem(e.stock, e.sector, e.gene, e.prepScore))
+    .filter(Boolean)
+    .sort((a, b) => b.prepScore - a.prepScore)
+
+  const recommendations = allItems.filter((x) => x.acceptable).slice(0, 5)
+  const preparation = allItems.slice(0, 5).map((x, i) => ({ ...x, rank: i + 1 }))
+  const watchlist = allItems
+    .filter((x) => !x.acceptable)
+    .slice(0, 8)
+    .map((x, i) => ({ ...x, rank: i + 1 }))
 
   const watchSectors = sectors
     .filter((s) => !s.dataReady)
@@ -1141,6 +1434,8 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
 
   const rules = [
     '只在三关通过 + 情绪修复/主升时制定隔夜计划；冰点、退潮、混沌都不挂。',
+    '资金承接按四项证据核对：主力两日净流入、量能、封单、溢价/晋级；不是只看一条资金线。',
+    '弱转强优先：跌停反包 / 炸板回封 / 烂板转强 > 连板晋级 > 新晋首板。',
     '只做板块核心，不做杂毛补涨；没有催化核验的标的不进入计划。',
     '竞价高开 1%–4% 才执行；高开超过 6% 放弃，低开超过 -2% 放弃。',
     '单票 ≤ 10%，隔夜总仓 ≤ 30%；次日竞价不及预期先撤单，不摊低成本。',
@@ -1163,6 +1458,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     },
     dataReady,
     recommendations,
+    preparation,
     watchlist,
     watchSectors,
     rules,
@@ -1171,6 +1467,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     notes: [
       mode.note,
       '“隔夜单”是高风险计划：本页只提供条件与纪律，不保证成交价，也不保证次日溢价。',
+      '准备池按弱转强、板块地位、封板质量、筹码与历史画像综合排序；未满足三关 + 情绪 + 画像的，只进观察池。',
       '历史画像来自样本统计，不是准确率；样本外失效、风格切换都可能导致亏损。'
     ],
     source: '东方财富涨停池 / 板块资金 + 腾讯行情 + 历史样本统计'

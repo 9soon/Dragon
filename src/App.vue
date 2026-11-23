@@ -245,6 +245,7 @@ onBeforeUnmount(() => {
           v-if="active === 'mainline'"
           :dashboard="dashboard"
           :index-quote="indexQuote"
+          @open-edge="active = 'edge'"
         />
 
         <PicksView

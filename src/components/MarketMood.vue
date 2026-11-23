@@ -31,6 +31,11 @@ const premiumClass = computed(() => {
           <span class="chip" :class="s.score >= 55 ? 'chip--gold' : 'chip--dim'">
             {{ s.score >= 72 ? '主升' : s.score >= 55 ? '修复' : s.score >= 40 ? '分歧' : '退潮' }}
           </span>
+          <span
+            v-if="s.signal"
+            class="chip"
+            :class="s.signal.attack ? 'chip--red' : s.signal.defense ? 'chip--green' : 'chip--dim'"
+          >{{ s.signal.label }}</span>
         </div>
         <p class="mood-desc">{{ s.phase ? s.phase.desc : '正在计算涨停高度、封板质量与赚钱效应。' }}</p>
       </div>
@@ -66,6 +71,7 @@ const premiumClass = computed(() => {
     </div>
 
     <div class="mood-foot">
+      <span v-if="s.signal && s.signal.note" class="dim">{{ s.signal.note }}</span>
       <span v-if="promotion && promotion.rate != null">
         整体晋级率 <b class="mono">{{ promotion.rate }}%</b>
         <span class="dim">（{{ promotion.promoted }}/{{ promotion.total }}）</span>

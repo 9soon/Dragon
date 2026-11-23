@@ -198,6 +198,36 @@ async function getBoardQuotes(boardSecids) {
   return result.items || []
 }
 
+/**
+ * 全市场实时涨幅榜（沪深 A 股，剔除 ST / 退市整理）。
+ * 竞价阶段 f3 是集合竞价参考涨幅；盘中是实时涨幅。
+ * 用于抓“昨天炸板/跌停，今天弱转强”的非涨停池个股，避免只看昨日涨停池。
+ */
+async function scanMarketLeaders(limit = 80) {
+  const size = Math.max(20, Math.min(100, Number(limit) || 80))
+  return cached(`scan:leaders:${size}`, 1800, async () => {
+    const url =
+      `https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=${size}&po=1&np=1` +
+      `&ut=${UT_QUOTE}&fltt=2&invt=2&fid=f3` +
+      `&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23` +
+      `&fields=${QUOTE_FIELDS}&_=${Date.now()}`
+    const json = await emFetch(url, { timeout: 10000 })
+    const diff = json && json.data && json.data.diff
+    if (!Array.isArray(diff)) return { items: [], at: Date.now() }
+    const items = diff
+      .map(normalizeQuote)
+      .filter(
+        (q) =>
+          q &&
+          q.code &&
+          /^\d{6}$/.test(q.code) &&
+          !/ST|退/i.test(q.name || '') &&
+          q.pct != null
+      )
+    return { items, at: Date.now() }
+  })
+}
+
 async function fetchBoardPage(page) {
   const url =
     `https://push2.eastmoney.com/api/qt/clist/get?pn=${page}&pz=500&po=1&np=1` +
@@ -677,13 +707,13 @@ async function getFlowHistory(boardCode) {
       .map((line) => {
         const p = String(line).split(',')
         return {
-          date: p[0],
+          date: String(p[0] || '').replace(/-/g, ''),
           main: num(p[1], null),
           mainPct: num(p[6], null)
         }
       })
       .filter((x) => x.date && x.main != null)
-    rows.forEach((x) => recordFlow(boardCode, x.date.replace(/-/g, ''), x.main))
+    rows.forEach((x) => recordFlow(boardCode, x.date, x.main))
     return rows
   })
 }
@@ -959,11 +989,21 @@ async function getTrends(secid, { compare = false } = {}) {
   return result
 }
 
-function boardFlowSnapshot(history, tradeDate) {
-  const sorted = (history || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1))
-  const todayRow = sorted.find((x) => x.date === tradeDate) || null
-  const prior = sorted.filter((x) => x.date < tradeDate)
-  const yesterday = prior.length ? prior[prior.length - 1] : null
+function boardFlowSnapshot(history, tradeDate, prevTradeDate = null) {
+  const stamp = String(tradeDate || '').replace(/-/g, '')
+  const prevStamp = prevTradeDate ? String(prevTradeDate).replace(/-/g, '') : null
+  const rows = (history || []).map((x) => ({
+    ...x,
+    date: String(x.date || '').replace(/-/g, '')
+  }))
+  const sorted = rows.sort((a, b) => (a.date < b.date ? -1 : 1))
+  const todayRow = sorted.find((x) => x.date === stamp) || null
+  /* 优先按真实上一交易日取数，避免历史里夹带非交易日行或今日行 */
+  let yesterday = prevStamp ? sorted.find((x) => x.date === prevStamp) || null : null
+  if (!yesterday) {
+    const prior = sorted.filter((x) => x.date < stamp)
+    yesterday = prior.length ? prior[prior.length - 1] : null
+  }
   return { todayRow, yesterday, history: sorted.slice(-5) }
 }
 
@@ -974,6 +1014,7 @@ module.exports = {
   findPoolBack,
   getBoards,
   getBoardQuotes,
+  scanMarketLeaders,
   batchQuotes,
   tencentQuotes,
   getTodayFlow,

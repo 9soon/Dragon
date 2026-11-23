@@ -30,12 +30,18 @@ const {
 } = require('./eastmoney')
 const {
   buildSectors,
+  applySectorEvidence,
   buildSentiment,
   buildPicks,
   buildReview,
   matchBoard,
   flowText
 } = require('./scoring')
+const {
+  buildWeakContext,
+  weakMapFor,
+  enrichPicks
+} = require('./gene')
 const {
   buildAuction,
   buildOvernight,
@@ -107,6 +113,19 @@ function quotesByCode(quoteItems) {
   return map
 }
 
+function poolBrief(items) {
+  return (items || []).map((s) => ({
+    code: s.code,
+    name: s.name,
+    sector: s.sector,
+    lbc: s.lbc,
+    firstSeal: s.firstSeal,
+    blowCount: s.blowCount,
+    amount: s.amount,
+    price: s.price
+  }))
+}
+
 async function buildDashboard() {
   const now = beijingNow()
   const today = dateStamp(now)
@@ -164,6 +183,21 @@ async function buildDashboard() {
     warnings.push('跌停池读取失败')
   }
 
+  /* 弱转强需要昨日炸板 / 跌停池：炸板回封、跌停反包都来自这里 */
+  let prevBlowPool = []
+  let prevDownPool = []
+  if (prevTradeDate) {
+    const [pb, pd] = await Promise.allSettled([
+      getPool(prevTradeDate, 'zb'),
+      getPool(prevTradeDate, 'dt')
+    ])
+    if (pb.status === 'fulfilled') prevBlowPool = pb.value.items || []
+    if (pd.status === 'fulfilled') prevDownPool = pd.value.items || []
+    if (pb.status !== 'fulfilled' || pd.status !== 'fulfilled') {
+      warnings.push('上一交易日炸板 / 跌停池读取失败，弱转强识别可能不完整')
+    }
+  }
+
   const groups = groupBySector(pool)
   const detailTargets = Array.from(groups.entries())
     .filter(([, arr]) => arr.length >= 2)
@@ -179,7 +213,7 @@ async function buildDashboard() {
     Promise.allSettled(
       Array.from(boardByCode.values()).map(async (board) => {
         const hist = await getFlowHistory(board.code)
-        return { code: board.code, snap: boardFlowSnapshot(hist, tradeDate) }
+        return { code: board.code, snap: boardFlowSnapshot(hist, tradeDate, prevTradeDate) }
       })
     ),
     Promise.allSettled(
@@ -242,13 +276,19 @@ async function buildDashboard() {
     warnings.push(`部分板块资金历史读取失败（${historyMissing} 个，资金关可能无法确认）`)
   }
 
-  const sectorData = buildSectors({ pool, prevPool, boards, flowMap, tradeDate })
+  const weakCtx = buildWeakContext({
+    prevPool,
+    prevBlow: prevBlowPool,
+    prevDown: prevDownPool
+  })
+  const weakMap = weakMapFor(pool, weakCtx)
+  const sectorData = buildSectors({ pool, prevPool, boards, flowMap, tradeDate, weakMap })
   const focusProxy = sectorData.mainCandidates
     .concat(sectorData.newThemes)
     .filter((s) => s.money.proxy)
   if (focusProxy.length) {
     warnings.push(
-      `${focusProxy.map((s) => s.name).join('、')} 未取到昨日资金明细：今日 + 5 日仅作参考，资金关仍要求两日真实净流入`
+      `${focusProxy.map((s) => s.name).join('、')} 未取到昨日资金明细：资金承接按量能 / 封单 / 溢价晋级等证据核对，主力资金一项记未知`
     )
   }
 
@@ -305,6 +345,9 @@ async function buildDashboard() {
   /* 指数与个股都使用 000001 这类代码，qMap 排除指数，避免与平安银行等个股冲突 */
   const qMap = quotesByCode(quoteItems.filter((q) => !indexSecids.includes(q.secid)))
 
+  /* 行情到位后补第 4 项证据（昨日涨停溢价），再定资金承接关 */
+  applySectorEvidence(sectorData, { quotesByCode: qMap, prevPool })
+
   const awaitingToday = !isTodayData && market.live
   const skipPremium = awaitingToday
   const sentiment = buildSentiment({
@@ -316,9 +359,15 @@ async function buildDashboard() {
     skipPremium
   })
 
-  const picks = buildPicks({
+  let picks = buildPicks({
     sectors: sectorData.mainCandidates.concat(sectorData.newThemes),
     quotesByCode: qMap
+  })
+  /* 先按基因分重排（弱转强 / 情绪 / 封板 / 画像），再给最终前 8 只补个股资金 */
+  picks = enrichPicks(picks, {
+    sectors: sectorData.mainCandidates.concat(sectorData.newThemes),
+    profile: peekDragonProfile(),
+    sentiment
   })
   if (picks.length && market.live) {
     const flowPicks = await Promise.allSettled(
@@ -367,11 +416,14 @@ async function buildDashboard() {
         ? closeCandidate.gatesPassed
         : closeCandidate.checks.filter((c) => c.pass).length
       const failed = closeCandidate.checks.filter((c) => !c.pass).map((c) => c.label)
+      const moneyCheck = closeCandidate.checks.find((c) => c.key === 'money')
       const moneyNote =
-        closeCandidate.money && closeCandidate.money.yesterday != null &&
-        failed.includes('资金连续流入')
-          ? `（昨日 ${flowText(closeCandidate.money.yesterday)}）`
-          : ''
+        moneyCheck && !moneyCheck.pass && moneyCheck.detail
+          ? `（${moneyCheck.detail}）`
+          : closeCandidate.money && closeCandidate.money.yesterday != null &&
+              failed.includes('资金承接（4项）')
+            ? `（昨日 ${flowText(closeCandidate.money.yesterday)}）`
+            : ''
       detail = `${sentiLead}今天没有板块三关全过；最强「${closeCandidate.name}」过 ${passed}/3 关` +
         (failed.length ? `，差「${failed.join('、')}」${moneyNote}` : '') +
         '，只做核心观察，不追高。'
@@ -445,6 +497,15 @@ async function buildDashboard() {
       counts: sectorData.counts,
       all: sectorData.all
     },
+    /* 上一交易日的涨停 / 炸板 / 跌停快照：竞价页据此识别弱转强，不再重复请求 */
+    prevContext: prevTradeDate
+      ? {
+          date: prevTradeDate,
+          zt: poolBrief(prevPool),
+          blow: poolBrief(prevBlowPool),
+          down: poolBrief(prevDownPool)
+        }
+      : null,
     picks,
     review,
     watchSecids,
@@ -453,6 +514,43 @@ async function buildDashboard() {
       name: '东方财富公开行情接口',
       note: '行情可能存在延迟；仅用于个人研究，不构成投资建议。'
     }
+  }
+
+  /* 首页直接带一份隔夜摘要：严格候选为空时也展示最强观察池与原因 */
+  try {
+    const overnight = buildOvernight({ dashboard, profile: peekDragonProfile(), now })
+    const trim = (item) => ({
+      code: item.code,
+      name: item.name,
+      sector: item.sector,
+      roleLabel: item.roleLabel,
+      lbc: item.lbc,
+      close: item.close,
+      limitUp: item.limitUp,
+      boardRule: item.boardRule,
+      score: item.score,
+      prepScore: item.prepScore,
+      geneScore: item.geneScore,
+      weakLabel: item.weakLabel || '',
+      acceptable: !!item.acceptable,
+      observation: !!item.observation,
+      why: (item.why || item.reasons || []).slice(0, 3),
+      risks: (item.risks || []).slice(0, 2),
+      tags: (item.tags || []).slice(0, 3)
+    })
+    dashboard.overnightBrief = {
+      status: overnight.status,
+      statusLabel: overnight.statusLabel,
+      reason: overnight.reason,
+      mode: overnight.mode,
+      dataReady: overnight.dataReady,
+      recommendations: (overnight.recommendations || []).slice(0, 3).map(trim),
+      preparation: (overnight.preparation || []).slice(0, 5).map(trim),
+      updatedAt: overnight.generatedAt
+    }
+  } catch (err) {
+    dashboard.overnightBrief = null
+    warnings.push(`隔夜计划生成失败：${err.message}`)
   }
 
   lastGood = dashboard

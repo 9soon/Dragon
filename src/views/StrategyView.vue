@@ -34,18 +34,43 @@ const gates = [
   },
   {
     no: '03',
-    title: '催化关 · 题材纯正',
+    title: '资金承接关 · 四项证据',
     body:
-      '政策文件、产业订单/涨价/技术突破、事件驱动，至少有一项可核实证据。纯传闻、无信源小作文、蹭热点改名，直接排除。未核验催化的个股只显示观察分，不解除观察状态。',
-    check: '对应动作：每个板块右上角「催化核验」，人工标记'
+      '不再只看“连续两日主力净流入”一条线，而是核对四项证据：① 主力资金今、昨两日真实净流入；② 量能，同股今日成交额 ≥ 昨日 75%；③ 封单，涨停股封单合计 / 流通市值 ≥ 0.5%；④ 溢价 / 晋级，昨日涨停股今日平均溢价为正且板块晋级率 ≥ 30%。至少 3 项成立、且主力资金不硬性转负才通过。',
+    check: '对应数据：checks.money.evidence（主力资金 / 量能 / 封单 / 溢价晋级）'
   },
   {
     no: '04',
-    title: '资金关 · 连续两日净流入',
+    title: '催化关 · 题材纯正（人工）',
     body:
-      '板块连续 2 个交易日主力净流入。当天脉冲、次日集体低开的一日游，在资金维度就过不了关。接口受限时展示「今日 + 5 日」金色近似参考，但资金关仍算未通过。',
-    check: '对应数据：money.today / yesterday / proxy'
+      '政策文件、产业订单/涨价/技术突破、事件驱动，至少有一项可核实证据。纯传闻、无信源小作文、蹭热点改名，直接排除。未核验催化的个股只显示观察分，不解除观察状态；数据三关不替代人工催化核验。',
+    check: '对应动作：每个板块右上角「催化核验」，人工标记'
   }
+]
+
+const sentimentWindows = [
+  ['进攻窗口', '晋级率 ≥35%、炸板率 <35%、昨日溢价 ≥0、最高板 ≥3，且首板与中位板仍有接力。此时才允许提高观察优先级。'],
+  ['观察窗口', '数据介于进攻与防守之间：可以跟踪最强核心，但不把仓位打满，不追一致加速。'],
+  ['防守窗口', '炸板率 ≥45%，或晋级率 <25%，或昨日溢价转负且炸板率 ≥30%。降频、空仓，不接高位断板。']
+]
+
+const weakLadder = [
+  ['跌停反包', 92, '昨日跌停，今日回封或盘中转强。最极端的弱转强，必须结合板块与催化，不单独作为买入理由。'],
+  ['炸板回封', 86, '昨日炸板未封，今日重新封板 / 转强，说明昨日抛压被资金承接。'],
+  ['烂板转强', 78, '昨日封板但炸过，今日封得更干净；筹码换手后转强。'],
+  ['连板晋级', 66, 'N 板 → N+1 板。按高度、封板时间与封单质量确认，不把晋级本身当利好。'],
+  ['封板提速', 64, '首封时间比昨日提前 ≥30 分钟，主动性增强。'],
+  ['强转强', 56, '昨日涨停，今日延续强势；没有额外惊喜，只算基础项。'],
+  ['新晋涨停', 48, '首板或缺少昨日样本，必须等次日二板确认，不参与第一天的一致。']
+]
+
+const geneFactors = [
+  ['情绪环境', 15, '冰点 34 / 退潮 48 / 混沌 66 / 修复 84 / 主升 94；进攻信号 +6，防守信号 -10。'],
+  ['板块地位', 18, '三关就绪 96 起，按通过关数、龙头身份、板块最高板加分。'],
+  ['弱转强', 22, '按左侧 48–92 分映射；盘中未封板时叠加距涨停强度。'],
+  ['封板质量', 20, '首封时间 50% + 封单占流通 40% + 炸板扣分 10%；未封板时看近板与量能。'],
+  ['筹码结构', 10, '换手 3%–20% 为良性；流通市值 50–300 亿更适配短线。'],
+  ['历史画像', 15, '六维分桶样本延续率合成；少于 3 条样本的桶不参与加权。']
 ]
 
 const roles = [
@@ -109,7 +134,7 @@ const workflowGroups = [
         time: '15:30–16:30',
         title: '三关筛选',
         body:
-          '逐项检查连续两日家数、高 / 中 / 低梯队、连续两日资金。任一关缺失就保留观察，不用近似值放行。',
+          '逐项检查连续两日家数、高 / 中 / 低梯队、资金四项证据（主力两日净流入 / 量能 / 封单 / 溢价晋级）。任一关缺失就保留观察，不用近似值放行。',
         out: '三关通过板块清单',
         veto: '没有板块同时通过三关 → 空仓等待'
       },
@@ -133,7 +158,7 @@ const workflowGroups = [
         time: '19:30–21:00',
         title: '隔夜条件单',
         body:
-          '只在三关 + 情绪修复 / 主升时制定。写清高开执行区间、放弃区间、止损与仓位，不用“感觉会涨”替代条件。',
+          '只在三关 + 情绪修复 / 主升时制定。弱转强优先，板块最高板龙头即使被炸板 / 换手罚分也要找回核验并明示风险；写清高开执行区间、放弃区间、止损与仓位。',
         out: '标的、价格区间、触发条件、失效条件、仓位',
         veto: '冰点 / 退潮 / 混沌 → 不挂隔夜单'
       },
@@ -225,12 +250,16 @@ const auctionRules = [
   [
     '三关 + 催化，缺一不可',
     '板块三关未过、催化未核验，竞价分再高也只显示观察，不进入执行清单。'
+  ],
+  [
+    '盘中只认封板确认',
+    '9:30–15:00 按封板确认 → 近板强度 → 量比 / 成交 → 板块共振 → 弱转强排序；未封板不算涨停，炸板不回封按失效处理。只列最强 5 只。'
   ]
 ]
 
 const overnightRules = [
-  ['只在三关 + 修复 / 主升', '数据未就绪、冰点、退潮、混沌都不挂隔夜单；没有主线时，空仓就是最优解。'],
-  ['只做板块核心 2–5 板', '优先情绪连板龙与趋势中军，不碰杂毛补涨；5 板以上只观察，炸过板的降级。'],
+  ['只在三关 + 修复 / 主升', '资金关按四项证据核对；数据未就绪、冰点、退潮、混沌都不挂隔夜单，没有主线时空仓就是最优解。'],
+  ['弱转强优先，只做 2–5 板核心', '跌停反包 / 炸板回封 / 烂板转强 > 连板晋级 > 新晋首板；不碰杂毛补涨，5 板以上只观察，炸过板的不进严格候选。'],
   ['催化必须人工核验', '政策 / 产业 / 事件要有原始信源；纯传闻、无信源小作文、一天脉冲直接排除。'],
   ['条件单而非预测单', '高开 +1% ~ +4% 执行，高开 > +6% 放弃，低开 < -2% 放弃，9:25 跌回平盘失效。'],
   ['仓位和止损写死', '单票 ≤ 10%，隔夜总仓 ≤ 30%；跌破昨收 -3% 或分时均线走弱，先退出再复盘。'],
@@ -348,7 +377,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
     <section class="section">
       <header class="section-head">
         <span class="section-title">四道闸门</span>
-        <span class="section-count">01 / 02 / 04 数据三关 · 03 人工核验</span>
+        <span class="section-count">01 / 02 / 03 数据三关 · 04 人工核验</span>
       </header>
       <div class="strategy-list">
         <div v-for="gate in gates" :key="gate.no" class="strategy-item">
@@ -364,8 +393,8 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
     <section class="section">
       <header class="section-head">
-        <span class="section-title">竞价抓强 · 五条硬规则</span>
-        <span class="section-count">9:15–9:30 · 1.5 秒刷新</span>
+        <span class="section-title">竞价 / 盘中抓强 · 六条硬规则</span>
+        <span class="section-count">9:15–15:00 · 1.5 秒刷新</span>
       </header>
       <div class="stage-rail">
         <div class="stage-cell stage-cell--trial">
@@ -387,6 +416,11 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
           <b class="mono">9:30</b>
           <span>承接</span>
           <small>看开盘</small>
+        </div>
+        <div class="stage-cell stage-cell--open">
+          <b class="mono">10:00</b>
+          <span>盘中</span>
+          <small>实时抓板</small>
         </div>
       </div>
       <div class="strategy-list">
@@ -458,6 +492,54 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
     <section class="section">
       <header class="section-head">
+        <span class="section-title">情绪周期 · 弱转强 · 基因分</span>
+        <span class="section-count">把“强”拆成可解释的分数</span>
+      </header>
+
+      <div class="window-grid">
+        <div
+          v-for="(w, i) in sentimentWindows"
+          :key="w[0]"
+          class="window-card"
+          :class="`window-card--${i}`"
+        >
+          <b>{{ w[0] }}</b>
+          <p>{{ w[1] }}</p>
+        </div>
+      </div>
+
+      <div class="panel panel-pad weak-panel">
+        <h4>弱转强优先级 · 分数越高越优先</h4>
+        <div v-for="w in weakLadder" :key="w[0]" class="weak-row">
+          <span class="weak-score">{{ w[1] }}</span>
+          <div class="weak-main">
+            <b>{{ w[0] }}</b>
+            <p>{{ w[2] }}</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel panel-pad gene-panel">
+        <h4>龙头基因 · 六因子权重</h4>
+        <div v-for="g in geneFactors" :key="g[0]" class="gene-row">
+          <div class="gene-label">
+            <b>{{ g[0] }}</b>
+            <span class="mono">{{ g[1] }}%</span>
+          </div>
+          <div class="gene-bar">
+            <i :style="{ width: `${g[1] * 5}%` }"></i>
+          </div>
+          <p>{{ g[2] }}</p>
+        </div>
+        <p class="gene-note">
+          准备池 = 42% 基因 + 22% 基础分 + 14% 板块热度 + 10% 高度 + 12% 弱转强；
+          最终个股分 = 72% 角色初筛 + 28% 基因。所有分数只用于横向比较，不承诺胜率。
+        </p>
+      </div>
+    </section>
+
+    <section class="section">
+      <header class="section-head">
         <span class="section-title">老龙头画像 · 六维与口径</span>
         <span class="section-count">历史样本 · 不是准确率</span>
       </header>
@@ -510,27 +592,43 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         </div>
         <div class="formula-row">
           <code>个股</code>
-          <span>54% 角色分 + 30% 板块热度 + 16% 板块就绪度；炸板、尾盘封板、高位爆量、薄封单分别扣分。</span>
+          <span>初筛 = 54% 角色分 + 30% 板块热度 + 16% 就绪度；最终 = 72% 初筛 + 28% 基因分。炸板、尾盘封板、高位爆量、薄封单分别扣分。</span>
         </div>
         <div class="formula-row">
           <code>封顶</code>
           <span>未过三关的板块，个股最高 68 分；新起题材最高 60 分，并统一标记「仅观察」。</span>
         </div>
         <div class="formula-row">
+          <code>资金</code>
+          <span>四项证据：主力资金（今昨两日真实净流入）、量能（同股成交额 ≥ 昨日 75%）、封单（合计 / 流通 ≥ 0.5%）、溢价 / 晋级（昨日涨停溢价为正且晋级率 ≥ 30%）；至少 3 项成立且主力资金不硬性转负。</span>
+        </div>
+        <div class="formula-row">
           <code>情绪</code>
-          <span>25% 昨日涨停溢价 + 20% 涨停家数 + 20% 连板高度 + 20% 封板质量 + 15% 晋级率。</span>
+          <span>25% 昨日涨停溢价 + 20% 涨停家数 + 20% 连板高度 + 20% 封板质量 + 15% 晋级率；晋级率 ≥35% / 炸板率 <35% 记为进攻，炸板率 ≥45% 或晋级率 <25% 记为防守。</span>
+        </div>
+        <div class="formula-row">
+          <code>基因</code>
+          <span>情绪 15% + 板块地位 18% + 弱转强 22% + 封板质量 20% + 筹码结构 10% + 历史画像 15%。</span>
         </div>
         <div class="formula-row">
           <code>竞价</code>
-          <span>90% ×（30% 涨幅 + 28% 竞价额 + 24% 板块共振 + 18% 封板质量）× 情绪系数 + 10% 画像分。</span>
+          <span>90% ×（30% 涨幅 + 28% 竞价额 + 24% 板块共振 + 18% 封板质量）× 情绪系数 + 10% 基因分；竞价确认分 ≥ 72。</span>
+        </div>
+        <div class="formula-row">
+          <code>盘中</code>
+          <span>62% ×（50% 近板强度 + 25% 量比 + 25% 成交额）+ 38% 基因分；封板确认后不低于基因分 + 2。只列最强 5 只。</span>
         </div>
         <div class="formula-row">
           <code>确认</code>
-          <span>竞价分 ≥ 72，且涨幅 +2% ~ +8%、竞价额 ≥ 2000 万且 ≥ 昨成交 2%、同板块 ≥ 2 只强势、三关通过、催化已核验。</span>
+          <span>竞价：涨幅 +2% ~ +8%、竞价额 ≥ 2000 万且 ≥ 昨成交 2%、同板块 ≥ 2 只强势、三关通过、催化已核验；盘中：最新价与买一贴在涨停价，且属于涨停池 / 三关板块 / 基因 ≥60。</span>
         </div>
         <div class="formula-row">
           <code>隔夜</code>
-          <span>56% 个股基础分 + 30% 画像分 + 14% 板块热度；三关、情绪修复 / 主升、催化核验缺一不可。</span>
+          <span>50% 基础分 + 30% 基因分 + 20% 板块热度；严格候选 = 三关 + 情绪修复/主升 + 画像 ≥55 + 隔夜分 ≥65 + 2–5 板 + 昨日无炸板。</span>
+        </div>
+        <div class="formula-row">
+          <code>准备池</code>
+          <span>42% 基因 + 22% 基础分 + 14% 板块热度 + 10% 高度 + 12% 弱转强；板块最高板龙头即使被炸板 / 换手罚分挤出选股前八，也会被找回并明示风险，只解释不挂单。</span>
         </div>
         <div class="formula-row">
           <code>画像</code>
@@ -581,7 +679,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         </div>
         <div class="source-row">
           <b>板块资金</b>
-          <span>东方财富板块资金流公开接口；受限时展示本机持久化的每日快照与「今日 + 5 日」金色近似参考，并明确标注，不视为通过资金关。</span>
+          <span>东方财富板块资金流公开接口 + 涨停池封单 / 同股量能 / 昨日涨停溢价与晋级率，合成为资金四项证据；受限时展示本机持久化的每日快照并明确标注，不把近似值当作通过。</span>
         </div>
         <div class="source-row">
           <b>板块目录</b>
@@ -594,6 +692,10 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         <div class="source-row">
           <b>竞价数据</b>
           <span>腾讯批量行情 + 东方财富涨停池；9:15–9:30 每 1.5 秒刷新，9:20 前只作试撮观察。</span>
+        </div>
+        <div class="source-row">
+          <b>盘中扫描</b>
+          <span>东方财富全市场涨幅榜（沪深两市，约 1.8 秒缓存）+ 涨停池 + 腾讯五档，盘中实时排序最强 5 只，未封板不当作涨停。</span>
         </div>
         <div class="divider" style="margin: 6px 0"></div>
         <div class="source-row">
@@ -938,8 +1040,8 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
 .stage-rail {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 5px;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
   margin-bottom: 10px;
 }
 
@@ -1081,6 +1183,171 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 .plan-spec-grid b {
   font-size: 12.5px;
   color: var(--text-soft);
+}
+
+.window-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.window-card {
+  padding: 9px 9px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.window-card b {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+}
+
+.window-card p {
+  margin: 3px 0 0;
+  font-size: 10.4px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.window-card--0 {
+  border-color: rgba(255, 84, 96, 0.22);
+  background: rgba(255, 84, 96, 0.04);
+}
+
+.window-card--0 b {
+  color: #ff9aa2;
+}
+
+.window-card--1 {
+  border-color: rgba(255, 180, 94, 0.2);
+  background: rgba(255, 180, 94, 0.04);
+}
+
+.window-card--1 b {
+  color: var(--warn);
+}
+
+.window-card--2 {
+  border-color: rgba(43, 211, 154, 0.2);
+  background: rgba(43, 211, 154, 0.04);
+}
+
+.window-card--2 b {
+  color: #7ce6bf;
+}
+
+.weak-panel,
+.gene-panel {
+  margin-bottom: 10px;
+}
+
+.weak-panel h4,
+.gene-panel h4 {
+  margin: 0 0 7px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--gold);
+}
+
+.weak-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.weak-row:last-child {
+  border-bottom: 0;
+}
+
+.weak-score {
+  flex: 0 0 auto;
+  width: 27px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid var(--gold-line);
+  background: var(--gold-soft);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--gold);
+}
+
+.weak-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.weak-main b {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.weak-main p {
+  margin: 2px 0 0;
+  font-size: 10.7px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.gene-row {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.gene-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.gene-label b {
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.gene-label span {
+  font-size: 10.5px;
+  color: var(--gold);
+}
+
+.gene-bar {
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.gene-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(243, 199, 119, 0.55), var(--gold));
+}
+
+.gene-row p {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+
+.gene-note {
+  margin: 9px 0 0;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.07);
+  font-size: 10.5px;
+  line-height: 1.65;
+  color: var(--muted);
 }
 
 .profile-grid {
