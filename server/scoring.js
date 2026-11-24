@@ -1116,15 +1116,32 @@ function buildReview({ sentiment, pool, blowPool, downPool, sectors, prevPool, q
     .slice()
     .sort((a, b) => b.ztCount - a.ztCount || b.blowCount - a.blowCount)
     .slice(0, 6)
-    .map((s) => ({
-      code: s.code,
-      name: s.name,
-      sector: s.sector,
-      pct: round(s.pct, 2),
-      ztDays: s.ztDays,
-      ztCount: s.ztCount,
-      blowCount: s.blowCount
-    }))
+    .map((s) => {
+      const q = quoteMap.get(s.code)
+      const turnover = q && q.turnover != null ? round(q.turnover, 2) : null
+      const mainInflow = q && q.mainInflow != null ? q.mainInflow : null
+      const heavy = turnover != null && turnover >= 15
+      const outflow = mainInflow != null && mainInflow < 0
+      const riskLabel = heavy && outflow
+        ? '放量炸板 · 主力净流出'
+        : heavy
+          ? '放量炸板'
+          : outflow
+            ? '炸板 · 主力净流出'
+            : '炸板'
+      return {
+        code: s.code,
+        name: s.name,
+        sector: s.sector,
+        pct: round(s.pct, 2),
+        ztDays: s.ztDays,
+        ztCount: s.ztCount,
+        blowCount: s.blowCount,
+        turnover,
+        mainInflow,
+        riskLabel
+      }
+    })
   const downTop = downPool.slice(0, 5).map((s) => ({
     code: s.code,
     name: s.name,

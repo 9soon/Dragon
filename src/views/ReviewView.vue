@@ -302,14 +302,15 @@ function tierTone(v) {
       <div class="panel panel-pad hotshot-intro">
         <p>
           把三家公开打法拆成可检查条件：首板要板块效应，二板看缩量与分歧，只做板块龙一；
-          没有合格载体就空仓。审美分只用于排序，不是胜率；催化未核验前只算待选。
+          没有合格载体就空仓。明日待选只从板块三关全过、且是板块龙一的 1–2 板里取；
+          龙一是 3 板或只过 1–2 关的降为观察。审美分只用于排序，不是胜率；催化未核验前只算待选。
         </p>
       </div>
 
       <div class="hotshot-panel">
         <div class="promo-head">
           <span>今日审美命中</span>
-          <span>{{ hotshotToday.length }} 只 · 收盘定格</span>
+          <span>{{ hotshotToday.length }} 只 · 收盘定格 · 只复盘</span>
         </div>
         <div v-if="hotshotToday.length" class="hotshot-hits">
           <div v-for="item in hotshotToday" :key="item.code" class="hotshot-hit">
@@ -399,8 +400,9 @@ function tierTone(v) {
         </div>
 
         <p class="promo-foot">
-          {{ hotshot.tomorrow.note }} 审美分 = 封板 / 板块 / 节点 / 身位 / 市值 / 换手 / 弱转强 / 板块地位；
-          待选不等于可买：催化未核验前只观察，审美分也不是胜率。
+          <template v-if="hotshotReady.length">{{ hotshot.tomorrow.note }} </template>
+          审美分 = 封板 / 板块 / 节点 / 身位 / 市值 / 换手 / 弱转强 / 板块地位；
+          明日待选要求板块三关全过 + 板块龙一 + 审美 ≥65；待选不等于可买：催化未核验前只观察，审美分也不是胜率。
         </p>
       </div>
     </section>
@@ -591,11 +593,24 @@ function tierTone(v) {
       <div class="panel list-panel">
         <h4>炸板压力</h4>
         <div v-if="!blown.length" class="empty-mini">今日没有重点炸板股。</div>
-        <div v-for="item in blown" :key="item.code" class="list-row">
-          <span class="nm">{{ item.name }}</span>
-          <span class="sub">{{ item.sector }}</span>
-          <span class="pct is-down">{{ fmtPct(item.pct) }}</span>
+        <div v-for="item in blown" :key="item.code" class="list-row list-row--stack">
+          <div class="blown-head">
+            <span class="nm">{{ item.name }}</span>
+            <span class="pct" :class="item.pct >= 0 ? 'is-up' : 'is-down'">{{ fmtPct(item.pct) }}</span>
+          </div>
+          <div class="blown-meta">
+            <span>{{ item.sector }}</span>
+            <span>炸 {{ item.blowCount }} 次</span>
+            <span v-if="item.turnover != null">换手 {{ item.turnover }}%</span>
+            <span v-if="item.mainInflow != null" :class="item.mainInflow < 0 ? 'is-down' : 'is-up'">
+              主力 {{ fmtMoney(item.mainInflow) }}
+            </span>
+            <em v-if="item.riskLabel" class="blown-tag">{{ item.riskLabel }}</em>
+          </div>
         </div>
+        <p class="section-note">
+          按连板高度与炸板次数排序；标「放量炸板 · 主力净流出」的只作风险样本，不进入明日待选。
+        </p>
       </div>
       <div class="panel list-panel">
         <h4>跌停 / 弱势</h4>

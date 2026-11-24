@@ -134,7 +134,11 @@ const auctionCards = computed(() =>
       const active = !!(auction.value && auction.value.active)
       let displayLabel = '竞价前准备'
       if (active) {
-        if (x.status === 'confirm' && cat.valid) displayLabel = '可执行候选'
+        if (x.sealed) {
+          displayLabel = auction.value.stage && auction.value.stage.intraday
+            ? '已封板 · 买不进'
+            : '已封板 · 排队观察'
+        } else if (x.status === 'confirm' && cat.valid) displayLabel = '可执行候选'
         else if (x.status === 'confirm') displayLabel = '待催化'
         else if (x.status === 'watch') displayLabel = '观察'
         else displayLabel = '剔除'
@@ -143,7 +147,7 @@ const auctionCards = computed(() =>
         ...x,
         cat,
         displayLabel,
-        actionable: active && x.status === 'confirm' && cat.valid
+        actionable: active && !x.sealed && x.status === 'confirm' && cat.valid
       }
     })
 )
@@ -894,8 +898,9 @@ onBeforeUnmount(() => {
             <div class="rule-line"><span>01</span><p>9:15–9:20 可撤单，只看不追；虚假挂单不计入判断。</p></div>
             <div class="rule-line"><span>02</span><p>9:20–9:25 不可撤单，是竞价参考价值最高的 5 分钟。</p></div>
             <div class="rule-line"><span>03</span><p>高开 +2% ~ +8%，竞价额 ≥ 2000 万且 ≥ 昨日成交 2%，才进入强势观察。</p></div>
-            <div class="rule-line"><span>04</span><p>高开 > 8% 不追，低开翻绿剔除；9:30 承接失败按失效处理。</p></div>
-            <div class="rule-line"><span>05</span><p>板块三关未过或催化未核验，竞价再强也只是观察，不执行。</p></div>
+            <div class="rule-line"><span>04</span><p>已封板只标「买不进 / 排队观察」，不进入可执行候选；竞价预警只提醒未涨停票。</p></div>
+            <div class="rule-line"><span>05</span><p>高开 > 8% 不追，低开翻绿剔除；9:30 承接失败按失效处理。</p></div>
+            <div class="rule-line"><span>06</span><p>板块三关未过或催化未核验，竞价再强也只是观察，不执行。</p></div>
           </template>
         </section>
 

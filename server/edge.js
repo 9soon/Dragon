@@ -1158,7 +1158,10 @@ function buildHotshotSection(items) {
       const stock = x.stock
       const lbc = x.lbc
       if (lbc < 1 || lbc > 2) return false
-      if (!x.sector || !sectorOk(x)) return false
+      /* 明日待选只从三关全过的板块里取；只过 1–2 关的降为观察，不降标准补位 */
+      if (!x.sector || !x.sector.dataReady) return false
+      /* 只做板块龙一：龙一是 3 板或不在 1–2 板范围时，宁可空仓，不拿跟随卡位 */
+      if (!x.hotPosition || !x.hotPosition.leader) return false
       if (x.node.tone === 'risk') return false
       if (x.threeCrowd || x.midTrap) return false
       if (!x.seal || x.seal.late || x.seal.sealRatio < 0.7) return false
@@ -1198,6 +1201,16 @@ function buildHotshotSection(items) {
 
   const readySet = new Set(ready.map((x) => x.stock.code))
   const whyWatch = (x) => {
+    if (!x.sector || !x.sector.dataReady) {
+      return `板块三关未全过（${num(x.sector && x.sector.gatesPassed, 0)}/3），只观察，不进明日待选`
+    }
+    if (!x.hotPosition || !x.hotPosition.leader) {
+      const lead =
+        (x.sector.board && x.sector.board.leadName) ||
+        (x.sector.stocks && x.sector.stocks[0] && x.sector.stocks[0].name) ||
+        '板块龙头'
+      return `板块龙一是 ${lead}，本票只是跟随 / 卡位，不进明日待选`
+    }
     if (quotaHit.has(x.stock.code)) return '同板块已有 2 只，避免同板块过度集中'
     if (x.seal.late) return `首封 ${sealTimeLabel(x.stock.firstSeal)} 偏晚`
     if (x.seal.thin) return `封单 ${round(x.seal.sealRatio, 2)}% 偏薄`
@@ -1209,12 +1222,13 @@ function buildHotshotSection(items) {
     const capYi = num(x.stock.floatCap, 0) / 1e8
     if (capYi < 20) return `流通 ${round(capYi, 1)} 亿偏小，波动与操控风险高`
     if (capYi > 300) return `流通 ${round(capYi, 1)} 亿偏大，短线弹性不足`
-    if (!sectorOk(x)) return '板块热度 / 家数 / 三关不足'
     if (x.node.role === 'follower') return '节点只是梯队跟随，不是板块前排'
     if (x.lbc === 1 && x.seal.minutes > 60) {
       return `首封 ${sealTimeLabel(x.stock.firstSeal)}，晚于 10:30`
     }
-    return `审美分 ${x.hotScore}，未到 65`
+    return x.hotScore >= 65
+      ? `审美 ${x.hotScore} 达标，但同板块名额或前排排序未进前 5`
+      : `审美分 ${x.hotScore}，未到 65`
   }
 
   const watch = []
@@ -1346,11 +1360,12 @@ function buildHotshotSection(items) {
       empty: tomorrowReady.length === 0,
       note:
         tomorrowReady.length === 0
-          ? '龙空龙：今天没有合格的打板载体，明天空仓等新核心，不拿后排凑数。'
-          : `最强 5 只以内、同板块最多 2 只；没有就空仓，符合“有龙做龙，无龙空仓”。`
+          ? '龙空龙：三关全过板块里没有合格的 1–2 板龙一，明天空仓等新核心；不拿跟随 / 只过 1–2 关的票凑数。'
+          : `只从三关全过、且是板块龙一的 1–2 板里选，最强 5 只以内、同板块最多 2 只；没有就空仓，符合“有龙做龙，无龙空仓”。`
     },
     notes: [
       '审美分 = 30% 封板 + 18% 板块 + 14% 节点 + 12% 身位 + 8% 市值 + 8% 换手 + 5% 弱转强 + 5% 板块地位；只用于排序，不是胜率。',
+      '明日待选只从“三关全过 + 板块龙一”的 1–2 板里取；板块龙头是 3 板或只过 1–2 关时，宁可空仓，不降标准补位。',
       '北京炒家偏好首板套利、板块效应与缩量二板；92科比只做高位龙头或低位首板 / 一进二，避开中位；全能的野人强调龙空龙，不是龙一就空仓。以上来自公开访谈与复盘总结，未验证其宣称胜率。',
       '板块采用行业板块口径，和概念题材不完全等价；打板前必须人工核对催化与同板块是否真的一条主线。',
       '缩量二板是加分项，但开板承接未知；首板换手过低多是关注度不足。'
