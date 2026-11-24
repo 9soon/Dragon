@@ -333,6 +333,91 @@ const accuracyNotes = [
 
 const verifyFields = ['日期', '代码 / 板块', '角色与画像分', '竞价硬条件', '次日开盘 / 收盘', '是否延续', '执行偏差']
 
+const hotshotTraders = [
+  {
+    key: 'bj',
+    name: '北京炒家',
+    tag: '首板套利 · 板块效应 · 分仓试错',
+    core: '只打 9% 以上的板，不做半路；先看板块有没有整体效应，再决定打哪一只。',
+    picks: [
+      '首板为主：回封板、换手板、缩量二板、尾盘板，按盘中“亮点”临场选。',
+      '同一板块必须有多只涨停 / 跟风，独苗不打；封单与封板时间比故事重要。',
+      '分仓、多账户、单票小仓，用试错换命中率；公开表示不做盘前预设。'
+    ],
+    encoded: [
+      '首板套利：同行业涨停 ≥3 家或板块热度 ≥45，才进入“今日审美命中”。',
+      '缩量二板加权：2 板换手 <3% 给换手满分，同时提示“开板承接未知”。',
+      '封板质量占 30%、板块占 18%；封单 <0.7% 或尾盘板直接不选。',
+      '首板次日只做一进二验证，仓位 0.5–1 成，不重仓。'
+    ],
+    notCopied: '不复制多账户分仓和“盘中凭感觉”的不可复现部分；我们把条件事前写死，盘中只做验证。'
+  },
+  {
+    key: 'kb',
+    name: '92科比',
+    tag: '情绪周期 · 只做两端 · 分歧转强',
+    core: '低位震荡做首板，主升做龙头，高位震荡做补涨 / 切换，主跌空仓；中位股不碰。',
+    picks: [
+      '只做高位绝对龙头，或低位首板 / 一进二；避开不上不下的中位板。',
+      '人气与流动性是溢价来源，题材要有新闻敏感度，不买没有资金关注的票。',
+      '买点在分歧转强、板上确认，不做半路；低于预期立刻走，不补仓摊薄。'
+    ],
+    encoded: [
+      '2 板给最高身位分；3 板只在唯一 / 领涨 / 最高板时保留，4 板以上基本不给打板分。',
+      '三板组、中位三板、梯队跟随在复盘里直接剔除，不进入待选。',
+      '情绪窗口决定能不能出手：退潮 / 防守只观察，进攻窗口才允许提高仓位。',
+      '弱转强单独加分：跌停反包、炸板回封、烂板转强按 92 / 86 / 78 分映射。'
+    ],
+    notCopied: '不把“情绪周期”包装成精确预测；它只是仓位开关，周期判断与数据闸门冲突时，以数据为准。'
+  },
+  {
+    key: 'yr',
+    name: '全能的野人',
+    tag: '龙空龙 · 只做龙一 · 等不到就不做',
+    core: '有龙做龙，无龙空仓；只做板块和市场最强的龙一，不做补涨龙，不做高切低。',
+    picks: [
+      '只认龙头：能扛住分歧、带动板块、封板最硬的那一只，跟风一律不看。',
+      '没有龙头就空仓等待，等待本身是风控，不是错过。',
+      '龙头断板 / 走弱就退出，不切低位补涨，不恋战。'
+    ],
+    encoded: [
+      '同板块按连板高度与封板质量排位，只有第 1 位标“板块龙一”，其余明确提示非龙一。',
+      '明日待选最多 5 只、同板块最多 2 只；没有合格载体就直接输出空仓提示。',
+      '板块无效应、节点只是跟随、封单薄、尾盘板，一律不进入可打板列表。',
+      '复盘只留前排核心，后排杂毛进入“剔除池”并写明原因。'
+    ],
+    notCopied: '不把“龙头”简化成最高板：最高板炸板多、换手过热时只当风向标，不自动成为买入对象。'
+  }
+]
+
+const hotshotConsensus = [
+  ['01 先板块，后个股', '三家都不做孤立涨停。板块没有 3 家以上涨停、没有连续性与梯队，个股封得再早也只观察。'],
+  ['02 只做前排 / 两端', '首板或高位龙头，避开中位三板与后排跟风；“看起来便宜”的低位杂毛不是机会。'],
+  ['03 封板质量是硬通货', '首封时间、封单占流通、炸板次数、换手区间，比题材故事更早决定成败。'],
+  ['04 买点只在板上 / 转强', '不半路、不低吸跟风；竞价高开过多、秒板、撤单，都按放弃处理。'],
+  ['05 空仓是默认选项', '没有合格载体、板块退潮、核心断板，最优解是空仓；不拿后排凑数。']
+]
+
+const hotshotAppGates = [
+  ['今日命中', '1–3 板、板块热度 ≥45 且同板 ≥3 家或至少过 1 关、炸板 <3、换手 ≤40%、封单 ≥0.7%、非尾盘板、审美 ≥62；同板块最多 2 只、总共最多 5 只。'],
+  ['明日可打板', '1–2 板、板块成立、节点非风险、封单 ≥0.7% 且非尾盘、换手 ≤30%、流通 20–300 亿；首板炸板 ≤1 且首封 ≤10:30，二板炸板 ≤2 且非跟随；审美 ≥65。'],
+  ['只观察', '方向对但条件未齐：封单薄、首封晚、炸板多、换手过热、流通过小 / 过大、板块不足、同板块名额已满。只列原因，不给买点。'],
+  ['空仓', '可打板为 0 时直接提示“龙空龙”，不降标准补位；审美分只用于排序，不是胜率。']
+]
+
+const hotshotSources = [
+  ['北京炒家 · 东方财富路演', 'http://roadshow.eastmoney.com/zw/20260529191838074681040'],
+  ['北京炒家 · 55188 复盘总结', 'https://www.55188.com/topics-8739933.html'],
+  ['北京炒家 · 360doc 访谈整理', 'http://www.360doc.cn/article/82999282_1143985706.html'],
+  ['北京炒家 · 新浪股吧讨论', 'http://guba.sina.cn/view_47732_1652.html'],
+  ['92科比 · 淘股吧文章', 'http://m.taoguba.com.cn/a/2vzjAKdmgsV'],
+  ['92科比 · Wogoo 观点整理', 'https://www.wogoo.com/sq/t/c6be92aa734c47608d463ebd6096c73b'],
+  ['92科比 · 55188 讨论', 'https://www.55188.com/thread-15260611-1-1.html'],
+  ['全能的野人 · 今日头条', 'https://m.toutiao.com/a7685780910100300328/'],
+  ['全能的野人 · 淘股吧', 'https://m.tgb.cn/Article/6340046/1'],
+  ['全能的野人 · 雪球', 'https://xueqiu.com/2858934390/304700772']
+]
+
 const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 </script>
 
@@ -671,6 +756,84 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
 
     <section class="section">
       <header class="section-head">
+        <span class="section-title">打板客审美 · 三家公开思路</span>
+        <span class="section-count">公开访谈与复盘 · 未验证胜率</span>
+      </header>
+      <div class="trader-grid">
+        <div v-for="t in hotshotTraders" :key="t.key" class="trader-card">
+          <div class="trader-head">
+            <b>{{ t.name }}</b>
+            <span>{{ t.tag }}</span>
+          </div>
+          <p class="trader-core">{{ t.core }}</p>
+          <div class="trader-block">
+            <small>选票审美</small>
+            <ul>
+              <li v-for="line in t.picks" :key="line">{{ line }}</li>
+            </ul>
+          </div>
+          <div class="trader-block">
+            <small>已编码成条件</small>
+            <ul class="is-encoded">
+              <li v-for="line in t.encoded" :key="line">{{ line }}</li>
+            </ul>
+          </div>
+          <p class="trader-no"><b>不照搬</b>{{ t.notCopied }}</p>
+        </div>
+      </div>
+
+      <div class="panel panel-pad core-panel">
+        <h4>三家共识 · 合并成五条</h4>
+        <div v-for="row in hotshotConsensus" :key="row[0]" class="core-row">
+          <span class="core-tag is-core">{{ row[0] }}</span>
+          <p>{{ row[1] }}</p>
+        </div>
+      </div>
+
+      <div class="panel panel-pad core-panel">
+        <h4>复盘页怎么落地 · 今日命中 / 明日待选 / 只观察 / 空仓</h4>
+        <div v-for="row in hotshotAppGates" :key="row[0]" class="core-row">
+          <span class="core-tag">{{ row[0] }}</span>
+          <p>{{ row[1] }}</p>
+        </div>
+        <p class="gene-note">
+          审美分 = 30% 封板质量 + 18% 板块质量 + 14% 节点 + 12% 身位 + 8% 市值 + 8% 换手
+          + 5% 弱转强 + 5% 板块地位。它只回答“谁更像这三家会看的票”，不回答“明天一定涨”。
+        </p>
+      </div>
+
+      <div class="panel panel-pad honesty-box">
+        <b>必须说清楚的三件事</b>
+        <p>
+          ① 公开胜率是自我描述，无法在本机复现；“审美分”只是排序工具，不是胜率，也不是买入信号。
+        </p>
+        <p>
+          ② 板块采用行业口径，和概念题材不完全等价；同板块是否真的一条主线、催化是否成立，必须人工核对。
+        </p>
+        <p>
+          ③ 缩量二板、首板套利都是风格偏好，不是稳赚规则；缩量二板的开板承接、首板换手过低都可能是陷阱。
+        </p>
+      </div>
+
+      <div class="panel panel-pad source-panel">
+        <h4>公开来源 · 仅作方法研究</h4>
+        <div class="source-list">
+          <a
+            v-for="src in hotshotSources"
+            :key="src[1]"
+            :href="src[1]"
+            target="_blank"
+            rel="noopener noreferrer"
+          >{{ src[0] }}</a>
+        </div>
+        <p>
+          以上为公开访谈、复盘与讨论页，不代表本工具与作者有合作；引用只为说明规则出处，公开宣称的胜率未经独立验证。
+        </p>
+      </div>
+    </section>
+
+    <section class="section">
+      <header class="section-head">
         <span class="section-title">老龙头画像 · 六维与口径</span>
         <span class="section-count">历史样本 · 不是准确率</span>
       </header>
@@ -760,6 +923,10 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         <div class="formula-row">
           <code>复盘</code>
           <span>晋级估算 = 平滑基准 × 高度系数 × 前排质量 × 瑕疵折扣，输出 ±9pp；基准用今日实测晋级率按先验平滑。前排只留 2–5 板、节点 ≥50、炸板 ≤2、换手 ≤30%、封单 ≥0.7%、非尾盘、非三板组 / 中位三板 / 跟随；高度风向标只看不接。</span>
+        </div>
+        <div class="formula-row">
+          <code>审美</code>
+          <span>打板客审美 = 30% 封板质量 + 18% 板块质量 + 14% 节点 + 12% 身位 + 8% 市值 + 8% 换手 + 5% 弱转强 + 5% 板块地位；今日命中 ≥62、明日可打板 ≥65，只用于复盘页排序，不是胜率。</span>
         </div>
         <div class="formula-row">
           <code>节点</code>
@@ -1653,6 +1820,122 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
   margin: 8px 0 0;
   font-size: 11.2px;
   line-height: 1.65;
+  color: var(--dim);
+}
+
+.trader-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.trader-card {
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-left: 2px solid rgba(243, 199, 119, 0.38);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.trader-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.trader-head b {
+  font-size: 14px;
+  color: var(--gold);
+}
+
+.trader-head span {
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.trader-core {
+  margin: 6px 0 0;
+  font-size: 11.6px;
+  line-height: 1.65;
+  color: var(--text-soft);
+}
+
+.trader-block {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.07);
+}
+
+.trader-block small {
+  display: block;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.trader-block ul {
+  margin: 5px 0 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trader-block li {
+  font-size: 10.8px;
+  line-height: 1.62;
+  color: var(--muted);
+}
+
+.trader-block ul.is-encoded li::marker {
+  color: rgba(243, 199, 119, 0.8);
+}
+
+.trader-no {
+  margin: 8px 0 0;
+  font-size: 10.6px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+
+.trader-no b {
+  display: inline-block;
+  margin-right: 5px;
+  font-weight: 600;
+  color: var(--warn);
+}
+
+.source-panel h4 {
+  margin: 0 0 7px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-soft);
+}
+
+.source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.source-list a {
+  font-size: 10.8px;
+  line-height: 1.5;
+  color: rgba(243, 199, 119, 0.82);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.source-list a:active {
+  color: var(--gold);
+}
+
+.source-panel p {
+  margin: 8px 0 0;
+  font-size: 10.4px;
+  line-height: 1.6;
   color: var(--dim);
 }
 </style>

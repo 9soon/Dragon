@@ -965,6 +965,399 @@ function planItemOf(x, rank) {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * 打板客审美：北京炒家 / 92科比 / 全能的野人 的公开打法，拆成可检查条件
+ * - 首板套利：板块效应 + 早封 + 换手健康 + 封单不薄
+ * - 一进二 / 二进三：低位优先，避开中位；缩量二板是加分项但承接未知
+ * - 龙空龙：只做板块内最强，不是龙一就观察；没有合格载体就空仓
+ * 这些是审美过滤，不是胜率；三家公开战绩无法在本地复现验证。
+ * ------------------------------------------------------------------ */
+function hotshotCapScore(floatCap) {
+  const yi = num(floatCap, 0) / 1e8
+  if (yi <= 0) return 50
+  if (yi < 20) return 45
+  if (yi < 30) return 70
+  if (yi <= 150) return 100
+  if (yi <= 250) return 80
+  if (yi <= 400) return 55
+  return 30
+}
+
+function hotshotTurnScore(turnover, lbc) {
+  const t = num(turnover, 0)
+  if (t <= 0) return 50
+  if (lbc >= 2) {
+    if (t < 0.8) return 45
+    if (t < 3) return 75
+    if (t <= 15) return 100
+    if (t <= 20) return 85
+    if (t <= 30) return 60
+    if (t <= 40) return 35
+    return 15
+  }
+  if (t < 1.5) return 35
+  if (t < 3) return 70
+  if (t <= 15) return 100
+  if (t <= 20) return 85
+  if (t <= 30) return 65
+  if (t <= 40) return 35
+  return 15
+}
+
+function hotshotHeightScore(lbc, { maxBoard, sameHeight, isLeader }) {
+  const h = num(lbc, 1)
+  if (h <= 1) return 82
+  if (h === 2) return 95
+  if (h === 3) return isLeader && sameHeight <= 1 && h >= maxBoard ? 60 : 22
+  if (h === 4) return 15
+  return 5
+}
+
+function hotshotPositionOf(stock, sector, node) {
+  if (!sector) return { score: 20, rank: 0, leader: false, count: 0 }
+  const stocks = sector.stocks || []
+  const idx = stocks.findIndex((s) => s.code === stock.code)
+  const leader = idx === 0
+  let score = 40
+  if (leader) score = 100
+  else if (idx === 1) score = 82
+  else if (idx === 2) score = 68
+  else if (node && node.role !== 'follower') score = 58
+  return { score, rank: idx >= 0 ? idx + 1 : stocks.length + 1, leader, count: stocks.length }
+}
+
+function hotshotProfileOf({ stock, sector, lbc, sameHeight, maxBoard, node, seal, sectorQ }) {
+  const position = hotshotPositionOf(stock, sector, node)
+  const capScore = hotshotCapScore(stock.floatCap)
+  const turnScore = hotshotTurnScore(stock.turnover, lbc)
+  const heightScore = hotshotHeightScore(lbc, {
+    maxBoard,
+    sameHeight,
+    isLeader: position.leader
+  })
+  const weakScore = num(stock.weak && stock.weak.score, 50)
+  const score = round(
+    clamp(
+      0.3 * seal.score +
+        0.18 * sectorQ +
+        0.14 * node.score +
+        0.12 * heightScore +
+        0.08 * capScore +
+        0.08 * turnScore +
+        0.05 * weakScore +
+        0.05 * position.score,
+      0,
+      100
+    ),
+    1
+  )
+  return {
+    score,
+    position,
+    parts: {
+      seal: seal.score,
+      sector: Math.round(sectorQ),
+      node: node.score,
+      height: heightScore,
+      cap: capScore,
+      turnover: turnScore,
+      weak: weakScore,
+      position: position.score
+    }
+  }
+}
+
+function hotshotTagsOf(x) {
+  const tags = []
+  const stock = x.stock || {}
+  const turnover = num(stock.turnover, 0)
+  if (x.lbc === 1) tags.push('北京炒家 · 首板套利', '92科比 · 低位首板')
+  if (x.lbc === 2) tags.push('92科比 · 一进二 / 二板核心')
+  if (x.lbc === 2 && turnover > 0 && turnover < 3) tags.push('北京炒家 · 缩量二板')
+  if (x.hotPosition && x.hotPosition.leader) tags.push('野人 · 龙空龙只做龙一')
+  const weakKind = stock.weak && stock.weak.kind
+  if (weakKind === 'downReversal' || weakKind === 'blowReversal' || weakKind === 'lame') {
+    tags.push('92科比 · 弱转强')
+  }
+  return Array.from(new Set(tags)).slice(0, 3)
+}
+
+function hotshotPlanOf(x) {
+  if (x.lbc === 1) {
+    return {
+      bucket: 'first',
+      bucketLabel: '一进二 · 首板强封',
+      entry: [
+        `竞价 +1%–4%、竞价额 ≥ 今日成交 3%，同板块至少 2 只红盘；9:30–10:30 盯买一，封板前扫板或回封打板。`,
+        `高开 >6% 或竞价额 <2%、板块核心走弱、10:30 仍未上板 → 放弃。`
+      ],
+      giveUp: '低开翻绿、竞价撤单、同板块没有第二只红盘，按失效处理。',
+      position: '试错 0.5–1 成；同板块最多 2 只，打板总仓 ≤3 成。'
+    }
+  }
+  if (x.lbc === 2) {
+    return {
+      bucket: 'second',
+      bucketLabel: '二进三 · 二板核心',
+      entry: [
+        `竞价 +1%–3%、竞价额 ≥ 今日成交 3%，同板块龙头红盘；只做分歧回封或分时均线转强，不接一致高开秒板。`,
+        `高开 >5%、竞价撤单、同板块无共振、最高板断板 → 放弃。`
+      ],
+      giveUp: '高开秒板不追；开板后不能回封，当天不再参与。',
+      position: '单票 ≤1 成；与晋级榜重叠时只算一笔，不重复加仓。'
+    }
+  }
+  return {
+    bucket: 'third',
+    bucketLabel: '三板以上 · 只观察',
+    entry: ['三板组与中位三板不进入打板候选，只作为情绪风向标。'],
+    giveUp: '不接中位、不接后排。',
+    position: '0 成观察。'
+  }
+}
+
+function buildHotshotSection(items) {
+  const list = Array.isArray(items) ? items : []
+  const byScore = (a, b) =>
+    b.hotScore - a.hotScore ||
+    b.promoProb - a.promoProb ||
+    b.node.score - a.node.score ||
+    b.lbc - a.lbc
+
+  const sectorOk = (x) => {
+    if (!x.sector) return false
+    const heat = num(x.sector.heat, 0)
+    const count = num(x.sector.todayCount, 0)
+    const gates = num(x.sector.gatesPassed, 0)
+    return (heat >= 45 && count >= 3) || gates >= 1
+  }
+
+  const hits = []
+  const hitSector = new Map()
+  for (const x of list
+    .filter((item) => {
+      if (item.lbc < 1 || item.lbc > 3) return false
+      if (!item.sector || !sectorOk(item)) return false
+      if (num(item.stock.blowCount, 0) >= 3 || num(item.stock.turnover, 0) > 40) return false
+      if (item.seal.late || item.seal.sealRatio < 0.7) return false
+      if (item.threeCrowd || item.midTrap) return false
+      if (item.lbc === 3 && item.node.role === 'follower') return false
+      return item.hotScore >= 62
+    })
+    .sort(byScore)) {
+    const key = x.sector.name
+    const used = hitSector.get(key) || 0
+    if (used >= 2) continue
+    hitSector.set(key, used + 1)
+    hits.push(x)
+    if (hits.length >= 5) break
+  }
+
+  const readyBase = list
+    .filter((x) => {
+      const stock = x.stock
+      const lbc = x.lbc
+      if (lbc < 1 || lbc > 2) return false
+      if (!x.sector || !sectorOk(x)) return false
+      if (x.node.tone === 'risk') return false
+      if (x.threeCrowd || x.midTrap) return false
+      if (!x.seal || x.seal.late || x.seal.sealRatio < 0.7) return false
+      if (num(stock.turnover, 0) > 30) return false
+      const capYi = num(stock.floatCap, 0) / 1e8
+      if (capYi < 20 || capYi > 300) return false
+      if (lbc === 1) {
+        if (num(stock.blowCount, 0) > 1) return false
+        if (num(stock.turnover, 0) < 1.5) return false
+        if (x.seal.minutes > 60) return false
+      } else {
+        if (num(stock.blowCount, 0) > 2) return false
+        if (num(stock.turnover, 0) < 0.8) return false
+        if (x.node.role === 'follower') return false
+      }
+      return x.hotScore >= 65
+    })
+    .sort(byScore)
+
+  const ready = []
+  const readySector = new Map()
+  const quotaHit = new Set()
+  for (const x of readyBase) {
+    const key = x.sector.name
+    const used = readySector.get(key) || 0
+    if (used >= 2) {
+      quotaHit.add(x.stock.code)
+      continue
+    }
+    readySector.set(key, used + 1)
+    ready.push(x)
+    if (ready.length >= 5) break
+  }
+  ready.forEach((x, i) => {
+    x.hotRank = i + 1
+  })
+
+  const readySet = new Set(ready.map((x) => x.stock.code))
+  const whyWatch = (x) => {
+    if (quotaHit.has(x.stock.code)) return '同板块已有 2 只，避免同板块过度集中'
+    if (x.seal.late) return `首封 ${sealTimeLabel(x.stock.firstSeal)} 偏晚`
+    if (x.seal.thin) return `封单 ${round(x.seal.sealRatio, 2)}% 偏薄`
+    if (num(x.stock.blowCount, 0) >= 3) return `炸板 ${num(x.stock.blowCount, 0)} 次`
+    if (num(x.stock.turnover, 0) > 30) return `换手 ${round(x.stock.turnover, 1)}% 过热`
+    if (x.lbc === 1 && num(x.stock.turnover, 0) < 1.5) {
+      return `换手 ${round(x.stock.turnover, 1)}% 偏低，关注度不足`
+    }
+    const capYi = num(x.stock.floatCap, 0) / 1e8
+    if (capYi < 20) return `流通 ${round(capYi, 1)} 亿偏小，波动与操控风险高`
+    if (capYi > 300) return `流通 ${round(capYi, 1)} 亿偏大，短线弹性不足`
+    if (!sectorOk(x)) return '板块热度 / 家数 / 三关不足'
+    if (x.node.role === 'follower') return '节点只是梯队跟随，不是板块前排'
+    if (x.lbc === 1 && x.seal.minutes > 60) {
+      return `首封 ${sealTimeLabel(x.stock.firstSeal)}，晚于 10:30`
+    }
+    return `审美分 ${x.hotScore}，未到 65`
+  }
+
+  const watch = []
+  const watchSector = new Map()
+  for (const x of list
+    .filter((item) => {
+      if (item.lbc < 1 || item.lbc > 2) return false
+      if (!item.sector || readySet.has(item.stock.code)) return false
+      if (num(item.stock.blowCount, 0) >= 4 || num(item.stock.turnover, 0) > 40) return false
+      if (item.seal.veryLate) return false
+      const capYi = num(item.stock.floatCap, 0) / 1e8
+      if (capYi < 10 || capYi > 400) return false
+      return item.hotScore >= 58
+    })
+    .sort(byScore)) {
+    const key = x.sector.name
+    const used = watchSector.get(key) || 0
+    if (used >= 1) continue
+    watchSector.set(key, used + 1)
+    watch.push(x)
+    if (watch.length >= 3) break
+  }
+
+  const todayList = hits.map((x, i) => ({
+    rank: i + 1,
+    code: x.stock.code,
+    name: x.stock.name,
+    lbc: x.lbc,
+    sector: x.sector.name,
+    score: x.hotScore,
+    tags: hotshotTagsOf(x),
+    why: [
+      `${x.lbc} 板 · 首封 ${sealTimeLabel(x.stock.firstSeal)} · ${
+        num(x.stock.blowCount, 0) ? `炸 ${num(x.stock.blowCount, 0)} 次` : '0 炸板'
+      } · 封单 ${round(x.seal.sealRatio, 2)}% · 换手 ${round(x.stock.turnover, 1)}% · ${round(
+        num(x.stock.floatCap, 0) / 1e8,
+        1
+      )} 亿`,
+      `板块「${x.sector.name}」热度 ${num(x.sector.heat, 0)} · 同板 ${num(
+        x.sector.todayCount,
+        0
+      )} 家 · ${
+        x.hotPosition.leader ? '板块领涨' : `板块第 ${x.hotPosition.rank} 位`
+      } · ${x.sector.dataReady ? '三关全过' : `过 ${num(x.sector.gatesPassed, 0)}/3 关`}`,
+      `审美 ${x.hotScore}：封板 ${x.hotParts.seal} / 板块 ${x.hotParts.sector} / 身位 ${x.hotParts.height} / 换手 ${x.hotParts.turnover}`
+    ],
+    risks: Array.from(
+      new Set([
+        num(x.stock.floatCap, 0) / 1e8 < 20
+          ? `流通仅 ${round(num(x.stock.floatCap, 0) / 1e8, 1)} 亿，波动与操控风险高`
+          : '',
+        ...x.risks,
+        x.hotPosition.leader ? '' : '板块内不是龙一，卡位需竞价确认',
+        x.sector.dataReady ? '' : '板块三关未全过，只用热度与家数做参考'
+      ])
+    )
+      .filter(Boolean)
+      .slice(0, 3)
+  }))
+
+  const tomorrowReady = ready.map((x) => {
+    const plan = hotshotPlanOf(x)
+    const capYi = round(num(x.stock.floatCap, 0) / 1e8, 1)
+    const risks = Array.from(
+      new Set([
+        ...x.risks,
+        !x.hotPosition.leader ? '板块内不是龙一，竞价必须确认卡位' : '',
+        !x.sector.dataReady ? '板块三关未全过，只能按热度 / 家数参考' : '',
+        x.lbc === 2 && num(x.stock.turnover, 0) < 1.5
+          ? '缩量加速，开板承接未知，只打回封 / 首封'
+          : '',
+        x.lbc === 1 ? '首板尚未建立市场地位，只做一进二验证，不重仓' : ''
+      ])
+    )
+      .filter(Boolean)
+      .slice(0, 4)
+    return {
+      rank: x.hotRank,
+      code: x.stock.code,
+      name: x.stock.name,
+      lbc: x.lbc,
+      sector: x.sector.name,
+      score: x.hotScore,
+      bucket: plan.bucket,
+      bucketLabel: plan.bucketLabel,
+      tags: hotshotTagsOf(x),
+      sealLabel: sealTimeLabel(x.stock.firstSeal),
+      sealRatio: round(x.seal.sealRatio, 2),
+      turnover: round(x.stock.turnover, 1),
+      blowCount: num(x.stock.blowCount, 0),
+      floatCapYi: capYi,
+      sectorHeat: num(x.sector.heat, 0),
+      sectorGates: num(x.sector.gatesPassed, 0),
+      sectorCount: num(x.sector.todayCount, 0),
+      sectorReady: !!x.sector.dataReady,
+      leader: !!x.hotPosition.leader,
+      why: [
+        `${x.lbc} 板 · 首封 ${sealTimeLabel(x.stock.firstSeal)} · ${
+          num(x.stock.blowCount, 0) ? `炸 ${num(x.stock.blowCount, 0)} 次` : '0 炸板'
+        } · 封单 ${round(x.seal.sealRatio, 2)}% · 换手 ${round(x.stock.turnover, 1)}% · ${capYi} 亿`,
+        `板块「${x.sector.name}」热度 ${num(x.sector.heat, 0)} · 同板 ${num(
+          x.sector.todayCount,
+          0
+        )} 家 · ${x.hotPosition.leader ? '板块领涨' : `板块第 ${x.hotPosition.rank} 位`}`,
+        `审美 ${x.hotScore}：${hotshotTagsOf(x).join(' / ')}`
+      ],
+      entry: plan.entry,
+      giveUp: plan.giveUp,
+      position: plan.position,
+      risks
+    }
+  })
+
+  const tomorrowWatch = watch.map((x) => ({
+    code: x.stock.code,
+    name: x.stock.name,
+    lbc: x.lbc,
+    sector: x.sector.name,
+    score: x.hotScore,
+    reason: whyWatch(x),
+    tags: hotshotTagsOf(x)
+  }))
+
+  return {
+    today: { count: todayList.length, list: todayList },
+    tomorrow: {
+      ready: tomorrowReady,
+      watch: tomorrowWatch,
+      empty: tomorrowReady.length === 0,
+      note:
+        tomorrowReady.length === 0
+          ? '龙空龙：今天没有合格的打板载体，明天空仓等新核心，不拿后排凑数。'
+          : `最强 5 只以内、同板块最多 2 只；没有就空仓，符合“有龙做龙，无龙空仓”。`
+    },
+    notes: [
+      '审美分 = 30% 封板 + 18% 板块 + 14% 节点 + 12% 身位 + 8% 市值 + 8% 换手 + 5% 弱转强 + 5% 板块地位；只用于排序，不是胜率。',
+      '北京炒家偏好首板套利、板块效应与缩量二板；92科比只做高位龙头或低位首板 / 一进二，避开中位；全能的野人强调龙空龙，不是龙一就空仓。以上来自公开访谈与复盘总结，未验证其宣称胜率。',
+      '板块采用行业板块口径，和概念题材不完全等价；打板前必须人工核对催化与同板块是否真的一条主线。',
+      '缩量二板是加分项，但开板承接未知；首板换手过低多是关注度不足。'
+    ]
+  }
+}
+
 function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
   const s = sentiment || {}
   const list = Array.isArray(pool) ? pool : []
@@ -1146,6 +1539,16 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     } else if (seal.late || seal.thin || midTrap || (sector && num(sector.gatesPassed, 0) < 1)) {
       riskLevel = 'mid'
     }
+    const hot = hotshotProfileOf({
+      stock,
+      sector,
+      lbc,
+      sameHeight,
+      maxBoard,
+      node,
+      seal,
+      sectorQ
+    })
 
     items.push({
       stock,
@@ -1169,7 +1572,10 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       riskShort: riskShort || '结构一般',
       thesis: nodeThesisOf(node, maxBoard),
       why,
-      risks: Array.from(new Set(risks)).slice(0, 5)
+      risks: Array.from(new Set(risks)).slice(0, 5),
+      hotScore: hot.score,
+      hotParts: hot.parts,
+      hotPosition: hot.position
     })
   }
 
@@ -1459,6 +1865,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     action,
     leader,
     promotionRank: qualified.map((x) => planItemOf(x, x.rank)),
+    hotshot: buildHotshotSection(items),
     heightWatch: heightWatch.map((x) => planItemOf(x, null)),
     rejected: {
       total: rejectedPool.length,

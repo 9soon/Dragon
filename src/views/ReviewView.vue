@@ -37,6 +37,16 @@ const rejected = computed(
 )
 const planReview = computed(() => (plan.value && plan.value.review) || [])
 const showRejected = ref(false)
+const hotshot = computed(() => (plan.value && plan.value.hotshot) || null)
+const hotshotToday = computed(
+  () => (hotshot.value && hotshot.value.today && hotshot.value.today.list) || []
+)
+const hotshotReady = computed(
+  () => (hotshot.value && hotshot.value.tomorrow && hotshot.value.tomorrow.ready) || []
+)
+const hotshotWatch = computed(
+  () => (hotshot.value && hotshot.value.tomorrow && hotshot.value.tomorrow.watch) || []
+)
 const live = computed(() => props.dashboard.dataMode === 'live')
 const snapshotLabel = computed(() => {
   const d = props.dashboard
@@ -281,6 +291,118 @@ function tierTone(v) {
         </div>
       </div>
       <p class="section-note">{{ plan.notes[0] }}</p>
+    </section>
+
+    <section v-if="hotshot" class="section hotshot-section">
+      <header class="section-head">
+        <span class="section-title">打板客审美</span>
+        <span class="section-count">北京炒家 · 92科比 · 全能的野人</span>
+      </header>
+
+      <div class="panel panel-pad hotshot-intro">
+        <p>
+          把三家公开打法拆成可检查条件：首板要板块效应，二板看缩量与分歧，只做板块龙一；
+          没有合格载体就空仓。审美分只用于排序，不是胜率。
+        </p>
+      </div>
+
+      <div class="hotshot-panel">
+        <div class="promo-head">
+          <span>今日审美命中</span>
+          <span>{{ hotshotToday.length }} 只 · 收盘定格</span>
+        </div>
+        <div v-if="hotshotToday.length" class="hotshot-hits">
+          <div v-for="item in hotshotToday" :key="item.code" class="hotshot-hit">
+            <div class="hotshot-hit-rank">{{ item.rank }}</div>
+            <div class="hotshot-hit-main">
+              <div class="promo-title">
+                <b>{{ item.name }}</b>
+                <span class="promo-board">{{ item.lbc }} 板</span>
+                <span class="promo-sector">{{ item.sector }}</span>
+                <span class="hotshot-score">审美 {{ item.score }}</span>
+              </div>
+              <div class="hotshot-tags">
+                <span v-for="tag in item.tags" :key="tag" class="chip chip--dim">{{ tag }}</span>
+              </div>
+              <p v-for="line in item.why.slice(0, 2)" :key="line" class="hotshot-line">
+                {{ line }}
+              </p>
+              <p v-if="item.risks.length" class="hotshot-risk">
+                风险：{{ item.risks.slice(0, 2).join('；') }}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div v-else class="promo-empty">今日没有同时满足封板、板块与身位审美的票。</div>
+      </div>
+
+      <div class="hotshot-panel">
+        <div class="promo-head">
+          <span>明日打板待选</span>
+          <span>可打板 {{ hotshotReady.length }} · 只观察 {{ hotshotWatch.length }}</span>
+        </div>
+        <div v-if="hotshotReady.length" class="hotshot-ready-list">
+          <div v-for="item in hotshotReady" :key="item.code" class="hotshot-ready">
+            <div class="hotshot-ready-head">
+              <div class="promo-title">
+                <b>{{ item.name }}</b>
+                <span class="promo-board">{{ item.lbc }} 板</span>
+                <span class="promo-sector">{{ item.sector }}</span>
+              </div>
+              <span class="hotshot-bucket">{{ item.bucketLabel }}</span>
+              <span class="hotshot-score">审美 {{ item.score }}</span>
+            </div>
+            <div class="hotshot-tags">
+              <span v-for="tag in item.tags" :key="tag" class="chip chip--dim">{{ tag }}</span>
+            </div>
+            <div class="hotshot-meta">
+              <span>首封 {{ item.sealLabel }}</span>
+              <span>封单 {{ item.sealRatio }}%</span>
+              <span>换手 {{ item.turnover }}%</span>
+              <span v-if="item.blowCount">炸 {{ item.blowCount }}</span>
+              <span>{{ item.floatCapYi }} 亿</span>
+              <span>板块 {{ item.sectorHeat }} · {{ item.sectorCount }} 家</span>
+              <span :class="{ 'is-dim': !item.leader }">
+                {{ item.leader ? '板块龙一' : '板块非龙一' }}
+              </span>
+            </div>
+            <p class="hotshot-line">{{ item.why[1] }}</p>
+            <div class="hotshot-entry">
+              <span>买点</span>
+              <ul>
+                <li v-for="line in item.entry" :key="line">{{ line }}</li>
+              </ul>
+            </div>
+            <p class="hotshot-giveup">放弃：{{ item.giveUp }}</p>
+            <p class="hotshot-position">仓位：{{ item.position }}</p>
+            <p v-if="item.risks.length" class="hotshot-risk">
+              风险：{{ item.risks.slice(0, 3).join('；') }}
+            </p>
+          </div>
+        </div>
+        <div v-else class="promo-empty">{{ hotshot.tomorrow.note }}</div>
+
+        <div v-if="hotshotWatch.length" class="hotshot-watch">
+          <div class="hotshot-subhead">
+            <span>只观察 · 条件未齐</span>
+            <span>{{ hotshotWatch.length }} 只</span>
+          </div>
+          <div v-for="item in hotshotWatch" :key="item.code" class="hotshot-watch-row">
+            <div class="hotshot-watch-title">
+              <b>{{ item.name }}</b>
+              <span>{{ item.lbc }} 板</span>
+              <span>{{ item.sector }}</span>
+              <em>审美 {{ item.score }}</em>
+            </div>
+            <p>{{ item.reason }}</p>
+          </div>
+        </div>
+
+        <p class="promo-foot">
+          {{ hotshot.tomorrow.note }} 审美分 = 封板 / 板块 / 节点 / 身位 / 市值 / 换手 / 弱转强 / 板块地位；
+          不是胜率，打板前仍需人工核验催化。
+        </p>
+      </div>
     </section>
 
     <section class="section">
@@ -1192,6 +1314,229 @@ function tierTone(v) {
   position: absolute;
   left: 0;
   color: var(--up);
+}
+
+/* ---------------- 打板客审美 ---------------- */
+
+.hotshot-section {
+  gap: 12px;
+}
+
+.hotshot-intro p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+.hotshot-panel {
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: linear-gradient(160deg, rgba(19, 26, 39, 0.9), rgba(9, 13, 20, 0.94));
+  overflow: hidden;
+}
+
+.hotshot-hit {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.hotshot-hit:first-child {
+  border-top: 0;
+}
+
+.hotshot-hit-rank {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gold);
+  line-height: 1.5;
+}
+
+.hotshot-hit-main {
+  min-width: 0;
+}
+
+.hotshot-score {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+.hotshot-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.hotshot-tags .chip {
+  height: 20px;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.hotshot-line {
+  margin: 5px 0 0;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.hotshot-risk {
+  margin: 5px 0 0;
+  font-size: 10.8px;
+  line-height: 1.65;
+  color: rgba(255, 154, 162, 0.84);
+}
+
+.hotshot-ready {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.hotshot-ready:first-child {
+  border-top: 0;
+}
+
+.hotshot-ready-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 7px;
+}
+
+.hotshot-ready-head .promo-title {
+  flex: 1;
+}
+
+.hotshot-bucket {
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--blue);
+  border: 1px solid rgba(102, 169, 255, 0.24);
+  background: var(--blue-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+.hotshot-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+
+.hotshot-meta .is-dim {
+  color: var(--warn);
+}
+
+.hotshot-entry {
+  display: flex;
+  gap: 8px;
+  padding: 8px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(243, 199, 119, 0.14);
+  background: rgba(243, 199, 119, 0.04);
+}
+
+.hotshot-entry > span {
+  flex-shrink: 0;
+  padding-top: 1px;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--gold);
+}
+
+.hotshot-entry ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.hotshot-entry li {
+  font-size: 10.9px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.hotshot-giveup,
+.hotshot-position {
+  margin: 0;
+  font-size: 10.8px;
+  line-height: 1.65;
+}
+
+.hotshot-giveup {
+  color: rgba(255, 154, 162, 0.8);
+}
+
+.hotshot-position {
+  color: var(--warn);
+}
+
+.hotshot-watch {
+  padding: 0 14px 4px;
+  border-top: 1px solid var(--line);
+}
+
+.hotshot-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 0 5px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.hotshot-watch-row {
+  padding: 8px 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.hotshot-watch-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-size: 10.8px;
+  color: var(--muted);
+}
+
+.hotshot-watch-title b {
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.hotshot-watch-title em {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-style: normal;
+  color: var(--gold);
+}
+
+.hotshot-watch-row p {
+  margin: 4px 0 0;
+  font-size: 10.6px;
+  line-height: 1.6;
+  color: var(--muted);
 }
 
 @media (max-width: 370px) {
