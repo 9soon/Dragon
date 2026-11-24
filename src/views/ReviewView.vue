@@ -302,7 +302,7 @@ function tierTone(v) {
       <div class="panel panel-pad hotshot-intro">
         <p>
           把三家公开打法拆成可检查条件：首板要板块效应，二板看缩量与分歧，只做板块龙一；
-          没有合格载体就空仓。审美分只用于排序，不是胜率。
+          没有合格载体就空仓。审美分只用于排序，不是胜率；催化未核验前只算待选。
         </p>
       </div>
 
@@ -339,7 +339,7 @@ function tierTone(v) {
       <div class="hotshot-panel">
         <div class="promo-head">
           <span>明日打板待选</span>
-          <span>可打板 {{ hotshotReady.length }} · 只观察 {{ hotshotWatch.length }}</span>
+          <span>待选 {{ hotshotReady.length }} · 只观察 {{ hotshotWatch.length }}</span>
         </div>
         <div v-if="hotshotReady.length" class="hotshot-ready-list">
           <div v-for="item in hotshotReady" :key="item.code" class="hotshot-ready">
@@ -368,7 +368,7 @@ function tierTone(v) {
             </div>
             <p class="hotshot-line">{{ item.why[1] }}</p>
             <div class="hotshot-entry">
-              <span>买点</span>
+              <span>执行条件</span>
               <ul>
                 <li v-for="line in item.entry" :key="line">{{ line }}</li>
               </ul>
@@ -400,7 +400,7 @@ function tierTone(v) {
 
         <p class="promo-foot">
           {{ hotshot.tomorrow.note }} 审美分 = 封板 / 板块 / 节点 / 身位 / 市值 / 换手 / 弱转强 / 板块地位；
-          不是胜率，打板前仍需人工核验催化。
+          待选不等于可买：催化未核验前只观察，审美分也不是胜率。
         </p>
       </div>
     </section>
