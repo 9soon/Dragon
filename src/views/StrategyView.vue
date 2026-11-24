@@ -318,6 +318,10 @@ const accuracyNotes = [
     '画像里的“次日延续率”只是历史样本中继续涨停的比例，未扣交易成本、滑点、无法成交与停牌，不能当成策略胜率。'
   ],
   [
+    '校准只做保守加权',
+    '复盘晋级概率会用近期涨停池做按日走样本外校准：前一日样本训练、后一日检验，不使用未来数据；只有 Brier 改善、AUC ≥0.55、Top10% 有增量且 2 板+ 子集同样有效时，才给模型最多 45% 权重。AUC 会用分层 bootstrap 给出 95% 区间；2 板+ 区间跨过 0.5 时，权重压回 30%。样本只有约 15 个交易日，仍可能被风格切换打穿。'
+  ],
+  [
     '必须自己做前向验证',
     '每天记录候选与次日结果，至少连续 20–60 个交易日；同时记录“未执行 / 执行偏差”。只统计成功案例没有意义。'
   ],
@@ -719,9 +723,12 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
           </p>
         </div>
         <p class="gene-note">
-          晋级估算 = 平滑基准 × 高度系数 × 前排质量 × 瑕疵折扣，输出 ±9pp 区间。
-          基准取今日实测的首板→二板、连板→连板晋级率，并按先验（首板 26% / 连板 40%，k=14）平滑；
-          小样本时结果主要受先验约束，是排序工具，不是胜率。
+          晋级估算 = 规则估算（平滑基准 × 高度系数 × 前排质量 × 瑕疵折扣）× (1 − 权重) +
+          历史校准模型 × 权重，输出 ±9pp 区间。规则基准取今日实测晋级率并按先验平滑；
+          校准模型用首封、封流比、封成比、炸板、流通盘、板块梯队与市场晋级率，
+          按日走样本外，只有 Brier 改善、AUC ≥0.55、Top10% 有增量且 2 板+ 子集同样有效时才启用；
+          AUC 附 bootstrap 95% 区间，2 板+ 区间跨 0.5 时权重上限压到 30%。
+          样本仍薄，是排序工具，不是胜率。
         </p>
       </div>
       <div class="panel panel-pad core-panel">
@@ -958,7 +965,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         </div>
         <div class="formula-row">
           <code>复盘</code>
-          <span>晋级估算 = 平滑基准 × 高度系数 × 前排质量 × 瑕疵折扣，输出 ±9pp；基准用今日实测晋级率按先验平滑。前排只留 2–5 板、节点 ≥50、炸板 ≤2、换手 ≤30%、封单 ≥0.7%、非尾盘、非三板组核按钮 / 同高度拥挤 / 中位断层 / 跟随；高度风向标只看不接。</span>
+          <span>晋级估算 = 规则估算 × (1 − 权重) + 历史校准模型 × 权重；规则基准用今日实测晋级率按先验平滑，校准用首封 / 封流比 / 封成比 / 炸板 / 流通盘 / 板块梯队 / 市场环境做按日走样本外，未达标不启用。输出 ±9pp；前排只留 2–5 板、节点 ≥50、炸板 ≤2、换手 ≤30%、封单 ≥0.7%、非尾盘、非三板组核按钮 / 同高度拥挤 / 中位断层 / 跟随；一字 / 秒板标注难有买点；高度风向标只看不接。</span>
         </div>
         <div class="formula-row">
           <code>审美</code>
@@ -1062,7 +1069,28 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
           <b>Qlib</b>
           <span>
             <a href="https://github.com/microsoft/qlib" target="_blank" rel="noopener">microsoft/qlib</a>
-            —— 因子研究与回测框架参考。
+            —— 因子研究、横截面标准化与走样本外验证参考。
+          </span>
+        </div>
+        <div class="source-row">
+          <b>Shadowell/Alpha</b>
+          <span>
+            <a href="https://github.com/Shadowell/Alpha" target="_blank" rel="noopener">Shadowell/Alpha</a>
+            —— 首板 / 晋级分层标签、可成交性与走样本外模型卡的思路参考。
+          </span>
+        </div>
+        <div class="source-row">
+          <b>limit-up-sniper</b>
+          <span>
+            <a href="https://github.com/guoyaohua/limit-up-sniper" target="_blank" rel="noopener">guoyaohua/limit-up-sniper</a>
+            —— 涨停基因因子、小样本收缩与可成交信号的工程参考。
+          </span>
+        </div>
+        <div class="source-row">
+          <b>QuantsPlaybook</b>
+          <span>
+            <a href="https://github.com/hugo2046/QuantsPlaybook" target="_blank" rel="noopener">hugo2046/QuantsPlaybook</a>
+            —— 券商金工因子复现与回测组织参考。
           </span>
         </div>
         <div class="source-row">
@@ -1104,7 +1132,7 @@ const currentGate = computed(() => props.dashboard && props.dashboard.gate)
         <div>不把涨幅第一当成龙头，不给孤零零的独苗高分。</div>
         <div>不自动判断新闻真假；催化必须人工核验，传闻直接排除。</div>
         <div>不在数据不足时硬给结论；接口异常会降级并明确提示。</div>
-        <div>不宣称竞价 / 隔夜“准确率”，不提供自动下单，也不把样本统计包装成回测收益。</div>
+        <div>不宣称竞价 / 隔夜“准确率”，不提供自动下单，也不把样本统计、Brier / AUC 或校准权重包装成回测收益。</div>
         <div>不替你做仓位决定；所有条件单都必须在你的券商端自行复核后手动提交。</div>
       </div>
     </section>

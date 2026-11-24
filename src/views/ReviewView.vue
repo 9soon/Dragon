@@ -32,11 +32,15 @@ const plan = computed(() => review.value.plan || null)
 const planAction = computed(() => (plan.value && plan.value.action) || null)
 const promoRank = computed(() => (plan.value && plan.value.promotionRank) || [])
 const heightWatch = computed(() => (plan.value && plan.value.heightWatch) || [])
+const oneWordWatch = computed(() => (plan.value && plan.value.oneWordWatch) || [])
 const nuclearWatch = computed(() => (plan.value && plan.value.nuclearWatch) || [])
 const rejected = computed(
   () => (plan.value && plan.value.rejected) || { total: 0, samples: [] }
 )
 const planReview = computed(() => (plan.value && plan.value.review) || [])
+const calibration = computed(() => (plan.value && plan.value.calibration) || null)
+const calBuckets = computed(() => (calibration.value && calibration.value.buckets) || [])
+const showCalibration = ref(false)
 const showRejected = ref(false)
 const hotshot = computed(() => (plan.value && plan.value.hotshot) || null)
 const hotshotToday = computed(
@@ -152,7 +156,7 @@ function tierTone(v) {
       <div v-if="plan.leader" class="leader-card">
         <div class="leader-head">
           <div class="leader-title">
-            <small>最可能接棒前排 · {{ plan.leader.tag }}</small>
+            <small>龙头评分第一 · {{ plan.leader.tag }}</small>
             <div class="leader-name-row">
               <b>{{ plan.leader.name }}</b>
               <span>{{ plan.leader.lbc }} 板</span>
@@ -166,9 +170,14 @@ function tierTone(v) {
         </div>
         <div class="leader-meta">
           <span>节点 {{ plan.leader.nodeLabel }} {{ plan.leader.nodeScore }}</span>
+          <span>龙头分 {{ plan.leader.leaderScore }}</span>
           <span>封单 {{ plan.leader.sealRatio }}%</span>
           <span>换手 {{ plan.leader.turnover }}%</span>
           <span>{{ plan.leader.floatCapYi }} 亿</span>
+          <span v-if="plan.leader.calibrationUsed" class="cal-chip">
+            规则 {{ plan.leader.ruleProb }} · 模型 {{ plan.leader.modelProb }}
+          </span>
+          <span v-if="plan.leader.tradableBoard === false" class="chip chip--warn">今日一字 / 秒板</span>
           <span
             v-if="plan.leader.nuclearLevel && plan.leader.nuclearLevel !== 'low'"
             class="nuke-chip"
@@ -209,6 +218,7 @@ function tierTone(v) {
                 <span class="promo-board">{{ item.lbc }} 板</span>
                 <span class="promo-sector">{{ item.sector }}</span>
                 <span class="promo-node">{{ item.nodeLabel }} {{ item.nodeScore }}</span>
+                <span v-if="!item.tradableBoard" class="chip chip--warn">一字 / 秒板</span>
                 <span
                   v-if="item.nuclearLevel && item.nuclearLevel !== 'low'"
                   class="nuke-chip"
@@ -236,6 +246,7 @@ function tierTone(v) {
             <div class="promo-prob">
               <b>{{ item.promoProb }}<small>%</small></b>
               <span>{{ item.probLow }}–{{ item.probHigh }}%</span>
+              <em v-if="item.calibrationUsed">规则 {{ item.ruleProb }}<br />模型 {{ item.modelProb }}</em>
             </div>
           </div>
         </div>
@@ -243,8 +254,115 @@ function tierTone(v) {
           今日没有通过前排过滤的连板核心，明天以观察为主，不为了交易而交易。
         </div>
         <p class="promo-foot">
-          概率为启发式估算：今日实测晋级率平滑 × 高度 × 封板质量 × 瑕疵折扣；不是胜率。
+          概率为规则估算与历史校准模型的保守加权；校准只用当日之前样本做走样本外检验，
+          达标才启用。它只用于排序与风险过滤，不是胜率；今日一字 / 秒板即使概率高，
+          也不等于明天有舒服买点，执行仍看竞价换手。
         </p>
+      </div>
+
+      <div v-if="oneWordWatch.length" class="oneword-panel">
+        <div class="promo-head">
+          <span>一字 / 秒板 · 只看不接</span>
+          <span>{{ oneWordWatch.length }} 只 · 普通资金难有买点</span>
+        </div>
+        <div v-for="item in oneWordWatch" :key="item.code" class="oneword-row">
+          <div class="oneword-main">
+            <div class="promo-title">
+              <b>{{ item.name }}</b>
+              <span class="promo-board">{{ item.lbc }} 板</span>
+              <span class="promo-sector">{{ item.sector }}</span>
+              <span class="promo-node">{{ item.nodeLabel }} {{ item.nodeScore }}</span>
+              <span class="chip chip--warn">一字 / 秒板</span>
+              <span
+                v-if="item.nuclearNextLevel && item.nuclearNextLevel !== 'low'"
+                class="nuke-chip"
+                :class="`is-${item.nuclearNextLevel}`"
+              >明日防核按钮 {{ item.nuclearNextScore }}</span>
+            </div>
+            <p class="oneword-meta">
+              首封 {{ item.firstSealLabel }} · 封单 {{ item.sealRatio }}% · 换手 {{ item.turnover }}% ·
+              {{ item.floatCapYi }} 亿
+            </p>
+            <p v-if="item.risks.length" class="promo-risk">
+              风险：{{ item.risks.slice(0, 2).join('；') }}
+            </p>
+          </div>
+          <div class="height-ref">
+            参考晋级
+            <b>{{ item.promoProb }}%</b>
+          </div>
+        </div>
+        <p class="promo-foot">
+          这些票今天买不到，晋级概率再高也不能当作可成交收益；明天只看竞价换手与封单是否延续，
+          不在竞价直接追一字。
+        </p>
+      </div>
+
+      <div v-if="calibration" class="cal-panel">
+        <button class="cal-toggle" @click="showCalibration = !showCalibration">
+          <span>
+            晋级概率校准 ·
+            {{ calibration.enabled ? `模型权重 ${Math.round(calibration.blendWeight * 100)}%` : '未启用' }}
+          </span>
+          <span>
+            {{ calibration.days }} 天 / {{ calibration.samples }} 样本 ·
+            {{ showCalibration ? '收起 ▴' : '看依据 ▾' }}
+          </span>
+        </button>
+        <div v-if="showCalibration" class="cal-body">
+          <div class="cal-metrics">
+            <div>
+              <small>样本外基准</small>
+              <b>{{ calibration.testBaseRate == null ? calibration.baseRate : calibration.testBaseRate }}%</b>
+            </div>
+            <div>
+              <small>Top10% 晋级</small>
+              <b class="is-up">{{ calibration.topDecile ? calibration.topDecile.rate + '%' : '--' }}</b>
+            </div>
+            <div>
+              <small>AUC</small>
+              <b>
+                {{ calibration.auc == null ? '--' : calibration.auc }}
+                <em v-if="calibration.aucCI">[{{ calibration.aucCI.low }}–{{ calibration.aucCI.high }}]</em>
+              </b>
+            </div>
+            <div>
+              <small>Brier</small>
+              <b>{{ calibration.brier }} <em>vs {{ calibration.baselineBrier }}</em></b>
+            </div>
+          </div>
+          <p class="cal-line">
+            样本外测试 {{ calibration.testDays }} 天 / {{ calibration.testSamples }} 只；全样本基准
+            {{ calibration.baseRate }}%（{{ calibration.samples }} 只）。AUC 区间为分层 bootstrap 95%。
+          </p>
+          <p v-if="calibration.continuation" class="cal-line">
+            2 板+ 子样本 {{ calibration.continuation.samples }} 只：基准
+            {{ calibration.continuation.baseRate }}%，Top20% 晋级
+            {{ calibration.continuation.topQuintile ? calibration.continuation.topQuintile.rate + '%' : '--' }}，
+            AUC {{ calibration.continuation.auc == null ? '--' : calibration.continuation.auc }}
+            <template v-if="calibration.continuation.aucCI">
+              [{{ calibration.continuation.aucCI.low }}–{{ calibration.continuation.aucCI.high }}]
+            </template>。
+          </p>
+          <p v-if="calibration.tradable" class="cal-line">
+            可成交子样本 {{ calibration.tradable.samples }} 只（剔除一字 / 秒板）：基准
+            {{ calibration.tradable.baseRate }}%，Top10% 晋级
+            {{ calibration.tradable.topDecile ? calibration.tradable.topDecile.rate + '%' : '--' }}，
+            AUC {{ calibration.tradable.auc == null ? '--' : calibration.tradable.auc }}
+            <template v-if="calibration.tradable.aucCI">
+              [{{ calibration.tradable.aucCI.low }}–{{ calibration.tradable.aucCI.high }}]
+            </template>。
+          </p>
+          <div v-if="calBuckets.length" class="cal-buckets">
+            <div class="cal-bucket-head"><span>同型样本</span><span>样本</span><span>晋级率</span></div>
+            <div v-for="b in calBuckets" :key="b.key" class="cal-bucket-row">
+              <span>{{ b.key }}</span><span>{{ b.n }}</span><b>{{ b.rate }}%</b>
+            </div>
+          </div>
+          <ul class="cal-notes">
+            <li v-for="n in calibration.notes" :key="n">{{ n }}</li>
+          </ul>
+        </div>
       </div>
 
       <div v-if="heightWatch.length" class="height-panel">
@@ -1033,6 +1151,8 @@ function tierTone(v) {
 }
 
 .promo-panel,
+.cal-panel,
+.oneword-panel,
 .height-panel,
 .reject-panel {
   border: 1px solid var(--line);
@@ -1196,6 +1316,154 @@ function tierTone(v) {
   white-space: nowrap;
 }
 
+.promo-prob em {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-style: normal;
+  line-height: 1.35;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.cal-chip {
+  padding: 1px 5px;
+  border: 1px solid rgba(102, 169, 255, 0.25);
+  border-radius: 4px;
+  background: rgba(102, 169, 255, 0.07);
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.cal-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-align: left;
+}
+
+.cal-toggle span:last-child {
+  flex-shrink: 0;
+  color: var(--dim);
+  font-size: 10.5px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.cal-body {
+  padding: 0 14px 12px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.cal-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.cal-metrics > div {
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cal-metrics small {
+  display: block;
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.cal-metrics b {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--text-soft);
+}
+
+.cal-metrics b em {
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.cal-line {
+  margin: 8px 0 0;
+  font-size: 10.5px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.cal-buckets {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cal-bucket-head,
+.cal-bucket-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px 56px;
+  gap: 6px;
+  padding: 5px 8px;
+  font-size: 10.5px;
+}
+
+.cal-bucket-head {
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.cal-bucket-head span:nth-child(2),
+.cal-bucket-head span:nth-child(3) {
+  text-align: right;
+}
+
+.cal-bucket-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+}
+
+.cal-bucket-row span:nth-child(2) {
+  text-align: right;
+  font-family: var(--mono);
+  color: var(--dim);
+}
+
+.cal-bucket-row b {
+  text-align: right;
+  font-family: var(--mono);
+  color: var(--gold);
+}
+
+.cal-notes {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  font-size: 10.5px;
+  line-height: 1.65;
+  color: var(--dim);
+}
+
+.cal-notes li + li {
+  margin-top: 3px;
+}
+
 .promo-foot {
   margin: 0;
   padding: 9px 14px 12px;
@@ -1259,6 +1527,31 @@ function tierTone(v) {
   font-family: var(--mono);
   font-size: 15px;
   color: var(--warn);
+}
+
+.oneword-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.oneword-row:last-of-type {
+  border-bottom: 0;
+}
+
+.oneword-main {
+  min-width: 0;
+}
+
+.oneword-meta {
+  margin: 4px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--dim);
 }
 
 .nuke-chip {

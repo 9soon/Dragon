@@ -31,6 +31,16 @@ const {
   stripLevel,
   is20cmCode
 } = require('./util')
+const {
+  peekPromotionCalibration,
+  publicCalibration,
+  calibrationSummary,
+  predictOne,
+  featuresOf,
+  contextOf,
+  bucketKeyOf,
+  isTradableBoard
+} = require('./calibration')
 
 const PROFILE_FILE = path.join(__dirname, '..', '.cache', 'dragon-profile.json')
 const PROFILE_TTL = 1000 * 60 * 60 * 6
@@ -1051,8 +1061,15 @@ function planItemOf(x, rank) {
     nodeWhy: (x.node.why || []).slice(0, 2),
     nodeRisks: (x.node.risks || []).slice(0, 2),
     promoProb: x.promoProb,
+    ruleProb: x.ruleProb == null ? x.promoProb : x.ruleProb,
+    modelProb: x.modelProb == null ? null : x.modelProb,
+    calibrationUsed: !!x.calibrationUsed,
     probLow: Math.max(2, Math.round(x.promoProb - 9)),
     probHigh: Math.min(70, Math.round(x.promoProb + 9)),
+    tradableBoard: x.tradableBoard !== false,
+    bucketKey: x.calBucket ? x.calBucket.key : null,
+    bucketRate: x.calBucket ? x.calBucket.rate : null,
+    bucketN: x.calBucket ? x.calBucket.n : null,
     promoQuality: x.promoQuality,
     baseRate: x.baseRate,
     qualityMult: x.qualityMult,
@@ -1526,6 +1543,22 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     }
   }
 
+  /* 历史校准：只有在走样本外指标达标时才给权重；否则完全回到规则估算 */
+  const cal = peekPromotionCalibration()
+  const calModel =
+    cal && cal.model && cal.model.enabled && num(cal.model.blendWeight, 0) > 0
+      ? cal.model
+      : null
+  const calWeight = calModel ? num(cal.model.blendWeight, 0) : 0
+  const calContext = contextOf({ items: list })
+  const calBucketMap = new Map(
+    ((cal && cal.buckets) || []).map((b) => [b.key, b])
+  )
+  const marketPromoRate = num(
+    s.promotion && s.promotion.overall && s.promotion.overall.rate,
+    25
+  )
+
   const sameHeightMap = new Map()
   for (const raw of list) {
     const h = num(raw.lbc, 0)
@@ -1573,6 +1606,10 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     }
     const lbc = num(stock.lbc, 0)
     const sameHeight = sameHeightMap.get(lbc) || 0
+    const calFeatures = featuresOf(stock, calContext, { promoRate: marketPromoRate })
+    const modelProb = calModel ? round(predictOne(calModel, calFeatures), 1) : null
+    const calBucket = calBucketMap.get(bucketKeyOf(stock, calFeatures)) || null
+    const tradableBoard = isTradableBoard(stock)
     const node = nodeModelOf(stock, sector, s)
     const seal = sealProfileOf(stock)
     const nuclear = nuclearRiskOf({ stock, sector, board: lbc, seal, sameHeight })
@@ -1626,7 +1663,15 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     const baseRate = lbc <= 1 ? firstBase : contBase
     const hMult = heightPromoMult(lbc)
     const qualityMult = 0.42 + 0.78 * (quality / 100)
-    const promoProb = round(clamp(baseRate * hMult * qualityMult * penalty, 3, 62), 1)
+    const ruleProb = round(clamp(baseRate * hMult * qualityMult * penalty, 3, 62), 1)
+    const promoProb =
+      modelProb == null
+        ? ruleProb
+        : round(
+            clamp(ruleProb * (1 - calWeight) + modelProb * calWeight, 3, 62),
+            1
+          )
+    const calibrationUsed = modelProb != null
     const promoQuality = round(quality * penalty, 1)
 
     const sectorLine = sector
@@ -1641,11 +1686,17 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
         1
       )}% · ${round(num(stock.floatCap, 0) / 1e8, 1)} 亿流通`,
       sectorLine,
-      `晋级估算：基准 ${baseRate}% × 高度 ${hMult} × 质量 ${round(qualityMult, 2)} × 瑕疵 ${round(
-        penalty,
+      `规则估算 ${ruleProb}%：基准 ${baseRate}% × 高度 ${hMult} × 质量 ${round(
+        qualityMult,
         2
-      )}`
+      )} × 瑕疵 ${round(penalty, 2)}`
     ]
+    if (calibrationUsed) {
+      why.push(
+        `校准模型 ${modelProb}% × 权重 ${calWeight} → 综合 ${promoProb}%` +
+          (calBucket ? `；同型 ${calBucket.key} 历史 ${calBucket.rate}%（n=${calBucket.n}）` : '')
+      )
+    }
     if (node.why[1]) why.splice(2, 0, node.why[1])
     if (stock.weak && stock.weak.label && stock.weak.kind !== 'fresh') {
       why.push(`弱转强：${stock.weak.label}`)
@@ -1667,6 +1718,9 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     if (seal.thin) risks.push(`封单 ${round(seal.sealRatio, 2)}% 偏薄`)
     if (num(stock.blowCount, 0) === 0 && num(stock.turnover, 0) > 0 && num(stock.turnover, 0) < 3) {
       risks.push('换手偏低，缺少分歧检验，警惕一致加速后的兑现')
+    }
+    if (!tradableBoard) {
+      risks.push('今日一字 / 秒板，普通资金难有买点；晋级估算不等于可成交收益')
     }
     if (sector && !sector.dataReady) {
       risks.push(`板块「${sector.name}」未过三关，晋级缺少板块共振`)
@@ -1751,6 +1805,11 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       heightMult: hMult,
       qualityMult: round(qualityMult, 2),
       penaltyMult: round(penalty, 2),
+      ruleProb,
+      modelProb,
+      calibrationUsed,
+      calBucket,
+      tradableBoard,
       promoProb,
       promoQuality,
       heightCrowd,
@@ -1771,26 +1830,40 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
   /* 推荐口径：20cm 不进入晋级榜 / 龙头 / 高位观察 / 剔除池 / 打板客，只留在涨停统计 */
   const recommendable = items.filter((x) => !is20cmCode(x.stock.code))
 
-  const qualifiedAll = recommendable
-    .filter(
-      (x) =>
-        x.lbc >= 2 &&
-        x.lbc <= 5 &&
-        x.node.score >= 50 &&
-        x.node.tone !== 'risk' &&
-        num(x.stock.blowCount, 0) <= 2 &&
-        num(x.stock.turnover, 0) <= 30 &&
-        x.seal.sealRatio >= 0.7 &&
-        !x.seal.late &&
-        !x.heightCrowd &&
-        !x.midTrap &&
-        x.nuclear.level !== 'high' &&
-        x.nuclearNext.level !== 'high' &&
-        x.node.role !== 'follower' &&
-        x.sector &&
-        (x.sector.dataReady ||
-          (num(x.sector.gatesPassed, 0) >= 1 && num(x.sector.heat, 0) >= 40))
+  function passesFrontRow(x) {
+    return (
+      x.lbc >= 2 &&
+      x.lbc <= 5 &&
+      x.node.score >= 50 &&
+      x.node.tone !== 'risk' &&
+      num(x.stock.blowCount, 0) <= 2 &&
+      num(x.stock.turnover, 0) <= 30 &&
+      x.seal.sealRatio >= 0.7 &&
+      !x.seal.late &&
+      !x.heightCrowd &&
+      !x.midTrap &&
+      x.nuclear.level !== 'high' &&
+      x.nuclearNext.level !== 'high' &&
+      x.node.role !== 'follower' &&
+      x.sector &&
+      (x.sector.dataReady ||
+        (num(x.sector.gatesPassed, 0) >= 1 && num(x.sector.heat, 0) >= 40))
     )
+  }
+
+  /* 一字 / 秒板：概率可能很高，但普通资金今天买不到；单列“只看不接”，
+     不混进可成交晋级榜，也不当作龙头。 */
+  const oneWordAll = recommendable
+    .filter((x) => !x.tradableBoard && passesFrontRow(x))
+    .sort(
+      (a, b) =>
+        b.promoProb - a.promoProb ||
+        b.node.score - a.node.score
+    )
+  const oneWordSet = new Set(oneWordAll.map((x) => x.stock.code))
+
+  const qualifiedAll = recommendable
+    .filter((x) => x.tradableBoard && passesFrontRow(x))
     .map((x) => {
       const weakScore = num(x.stock.weak && x.stock.weak.score, 55)
       const leaderScore = round(
@@ -1831,6 +1904,10 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     )
     .slice(0, 3)
   const watchSet = new Set(heightWatch.map((x) => x.stock.code))
+  const oneWordWatch = oneWordAll
+    .filter((x) => !watchSet.has(x.stock.code))
+    .slice(0, 3)
+    .map((x) => planItemOf(x, null))
   const highNuclear = recommendable.filter(
     (x) => x.nuclear.level === 'high' || x.nuclearNext.level === 'high'
   )
@@ -1839,7 +1916,8 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       (x) =>
         (x.nuclear.level !== 'low' || x.nuclearNext.level !== 'low') &&
         !qualifiedSet.has(x.stock.code) &&
-        !watchSet.has(x.stock.code)
+        !watchSet.has(x.stock.code) &&
+        !oneWordSet.has(x.stock.code)
     )
     .sort(
       (a, b) =>
@@ -1902,7 +1980,11 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
 
   const rejectedPool = recommendable
     .filter(
-      (x) => x.lbc >= 2 && !qualifiedSet.has(x.stock.code) && !watchSet.has(x.stock.code)
+      (x) =>
+        x.lbc >= 2 &&
+        !qualifiedSet.has(x.stock.code) &&
+        !watchSet.has(x.stock.code) &&
+        !oneWordSet.has(x.stock.code)
     )
     .sort(
       (a, b) =>
@@ -2068,9 +2150,10 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       ...base,
       tag: x.lbc >= maxBoard ? '空间核心' : '接棒核心候选',
       note:
-        x.lbc >= maxBoard
+        (x.lbc >= maxBoard
           ? `当前空间核心，但高位分歧放大；只做回封确认，不接一致加速。`
-          : `当前是 ${x.lbc} 板核心，距最高板 ${maxBoard - x.lbc} 板；只有最高板断板、且自身分歧回封，才谈接棒，不是现在就能追。`,
+          : `当前是 ${x.lbc} 板核心，距最高板 ${maxBoard - x.lbc} 板；只有最高板断板、且自身分歧回封，才谈接棒，不是现在就能追。`) +
+        (x.tradableBoard ? '' : ' 今日一字 / 秒板，明日只能看竞价换手，不给舒服买点。'),
       why: [
         ...base.why,
         `合格前排中龙头评分 ${x.leaderScore} 第一，晋级估算 ${x.promoProb}%`
@@ -2083,6 +2166,10 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
         .map((x) => `${x.stock.name} ${x.lbc} 板：${x.riskShort}`)
         .join('；')
     : '结构待确认'
+  const calibrationUsedGlobal = !!calModel
+  const calMetrics = cal && cal.model && cal.model.metrics ? cal.model.metrics : null
+  const calTop =
+    calMetrics && calMetrics.modelTopDecile ? calMetrics.modelTopDecile : null
   const threeBoardItems = recommendable.filter((x) => x.lbc === 3)
   const threeBoardText = threeBoardItems.length
     ? threeBoardItems
@@ -2097,7 +2184,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       topGap ? `${topGap} 板断层，` : ''
     }3 板 ${threeBoardCount} 家，2 板 ${twoBoardCount} 家。`,
     `中位：${threeBoardText}。2 板同高度竞争激烈，只留封板最干净、板块有共振的核心。`,
-    `前排：2 板+ ${recommendable.filter((x) => x.lbc >= 2).length} 只，合格 ${
+    `前排：2 板+ ${recommendable.filter((x) => x.lbc >= 2).length} 只，可成交合格 ${
       qualifiedAll.length
     } 只${
       qualified.length
@@ -2106,7 +2193,9 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
             .map((x) => x.stock.name)
             .join('、')}${qualifiedAll.length > 3 ? ' 等' : ''}）`
         : ''
-    }；剔除 ${rejectedPool.length + heightWatch.length} 只（高位观察 ${heightWatch.length} · 后排剔除 ${rejectedPool.length}）。`,
+    }${oneWordAll.length ? `；一字 / 秒板另列 ${oneWordAll.length} 只，只看不接` : ''}；剔除 ${
+      rejectedPool.length + heightWatch.length
+    } 只（高位观察 ${heightWatch.length} · 后排剔除 ${rejectedPool.length}）。`,
     `风险：三板组核按钮 ${highNuclear.length} 只${
       highNuclear.length
         ? `（${highNuclear
@@ -2115,6 +2204,13 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
             .join('、')}）`
         : ''
     }；同高度拥挤只是卡位竞争，不是三板组，两个口径不混用。`,
+    cal && calMetrics
+      ? `校准：${cal.days} 个交易日 / ${cal.samples} 个样本，走样本外 ${calMetrics.testDays} 天；Top10% 晋级 ${
+          calTop ? calTop.rate + '%' : '--'
+        } vs 基准 ${calMetrics.baseRate}%，Brier ${calMetrics.modelBrier} vs ${
+          calMetrics.baselineBrier
+        }。模型权重 ${calWeight}，只校准排序，不是胜率。`
+      : '校准：历史样本不足或未通过走样本外检验，晋级估算仍只用规则口径。',
     '口径：涨停家数与高度统计为全市场；推荐、晋级榜、龙头与明日待选剔除科创板 688/689、创业板 300/301 的 20cm。'
   ]
 
@@ -2128,6 +2224,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     promotionRank: qualified.map((x) => planItemOf(x, x.rank)),
     hotshot: buildHotshotSection(recommendable),
     heightWatch: heightWatch.map((x) => planItemOf(x, null)),
+    oneWordWatch,
     nuclearWatch,
     rejected: {
       total: rejectedPool.length,
@@ -2145,16 +2242,29 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     twoBoardCount,
     threeBoardCount,
     heightCrowdCount: items.filter((x) => x.heightCrowd).length,
+    oneWordCount: oneWordAll.length,
     nuclearHighCount: highNuclear.length,
     qualifiedCount: qualifiedAll.length,
     rejectedCount: rejectedPool.length + heightWatch.length,
     baseRates: { first: firstBase, continuation: contBase },
+    calibration: calibrationSummary(cal),
     notes: [
-      '晋级概率 = 今日实测晋级率平滑先验 × 高度系数 × 前排质量 × 瑕疵折扣；是排序工具，不是胜率，误差很大。',
+      calibrationUsedGlobal
+        ? `晋级概率 = 规则估算（晋级率平滑先验 × 高度 × 质量 × 瑕疵）× ${round(
+            1 - calWeight,
+            2
+          )} + 历史校准模型 × ${calWeight}；模型用首封、封流比、封成比、炸板、流通盘、板块梯队与市场环境，走样本外达标才启用。是排序工具，不是胜率。`
+        : '晋级概率 = 今日实测晋级率平滑先验 × 高度系数 × 前排质量 × 瑕疵折扣；历史校准未通过走样本外检验，暂不参与。是排序工具，不是胜率，误差很大。',
+      cal && calMetrics
+        ? `校准样本 ${cal.days} 个交易日 / ${cal.samples} 只，2 板+ 子样本 ${
+            calMetrics.continuation ? calMetrics.continuation.samples : '--'
+          } 只；若只对首板有效、对连板无效，权重会自动归零。样本仍薄，风格切换会失效。`
+        : '历史涨停池只能回溯约 15 个交易日；样本不足时明确不启用校准，不用“模型”包装规则。',
       contTotal < 10
         ? `今日连板晋级实测样本仅 ${contTotal} 只（${contPromoted}/${contTotal}），平滑后 ${contBase}% 主要受先验约束；小样本不能外推为明日真实胜率。`
         : `今日连板晋级实测 ${contPromoted}/${contTotal}（${contBase}%），已做先验平滑，仍需明日竞价与板块共振验证。`,
       `首板 ${firstCount} 家不逐一给概率，只统计首板→二板整体水平（平滑后 ${firstBase}%）。`,
+      '一字 / 秒板（9:25–9:30 首封且 0 炸板）不进入可成交晋级榜与龙头，单列「只看不接」；概率仍可参考，但普通资金难有买点，不能用买不到的样本给执行排序。',
       '三板组不是“同高度三板”：指小盘冷门票用一字 / T 字缩量加速到 3–4 板，封单极大、没有板块主线、从未分歧，随后在竞价撤单往下砸（核按钮），常见天地板 / A 杀。高风险不进前排与预警，只列观察。',
       '同高度 ≥2 且非最高板只是“同高度拥挤”，是卡位竞争；距顶 ≥2 板是“中位断层”。两者都不是三板组。',
       '弱势切核心抱团、分歧切核心：都只做最强核心，后排杂毛不参与。',

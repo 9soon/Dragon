@@ -51,6 +51,11 @@ const {
   warmDragonProfile,
   peekDragonProfile
 } = require('./edge')
+const {
+  ensurePromotionCalibration,
+  peekPromotionCalibration,
+  publicCalibration
+} = require('./calibration')
 
 const PORT = Number(process.env.PORT || 8787)
 const DIST = path.join(__dirname, '..', 'dist')
@@ -803,8 +808,31 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
+    if (pathname === '/api/calibration') {
+      const force = url.searchParams.get('refresh') === '1'
+      const task = ensurePromotionCalibration({ force }).catch((err) => {
+        console.error('[calibration]', err && err.message)
+        return null
+      })
+      const quick = await Promise.race([task, sleep(1400).then(() => null)])
+      const cal = quick || peekPromotionCalibration()
+      if (cal) {
+        sendJson(res, 200, { ...publicCalibration(cal), building: !quick })
+      } else {
+        sendJson(res, 200, {
+          ok: true,
+          building: true,
+          pending: true,
+          message:
+            '正在用近期涨停池做走样本外校准，首次约需 5–20 秒；样本不足时不会启用模型。'
+        })
+      }
+      return
+    }
+
     if (pathname === '/api/health') {
       const profile = peekDragonProfile()
+      const calibration = peekPromotionCalibration()
       sendJson(res, 200, {
         ok: true,
         time: new Date().toISOString(),
@@ -812,6 +840,24 @@ const server = http.createServer(async (req, res) => {
         dashboardReady: !!lastGood,
         dashboardAge: lastGoodAt ? Math.round((Date.now() - lastGoodAt) / 1000) : null,
         dashboardDate: lastGood ? lastGood.tradeDate : null,
+        calibration: calibration
+          ? {
+              builtAt: calibration.builtAt,
+              days: calibration.days,
+              samples: calibration.samples,
+              enabled: !!(calibration.model && calibration.model.enabled),
+              blendWeight:
+                calibration.model && calibration.model.blendWeight != null
+                  ? calibration.model.blendWeight
+                  : 0,
+              auc:
+                calibration.model &&
+                calibration.model.metrics &&
+                calibration.model.metrics.auc != null
+                  ? calibration.model.metrics.auc
+                  : null
+            }
+          : null,
         dragonProfile: profile
           ? {
               latestDate: profile.latestDate,
@@ -840,6 +886,14 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[龙脉] API + H5 服务已启动: http://127.0.0.1:${PORT}`)
   console.log(`[龙脉] 开发模式请另开终端执行 npm run dev (Vite 5173 代理 /api)`)
+  setTimeout(() => {
+    ensurePromotionCalibration().catch((err) =>
+      console.error('[calibration]', err && err.message)
+    )
+  }, 4000)
+  setInterval(() => {
+    ensurePromotionCalibration().catch(() => null)
+  }, 1000 * 60 * 60 * 3)
 })
 
 process.on('SIGINT', () => {
