@@ -32,6 +32,7 @@ const plan = computed(() => review.value.plan || null)
 const planAction = computed(() => (plan.value && plan.value.action) || null)
 const promoRank = computed(() => (plan.value && plan.value.promotionRank) || [])
 const heightWatch = computed(() => (plan.value && plan.value.heightWatch) || [])
+const nuclearWatch = computed(() => (plan.value && plan.value.nuclearWatch) || [])
 const rejected = computed(
   () => (plan.value && plan.value.rejected) || { total: 0, samples: [] }
 )
@@ -168,6 +169,16 @@ function tierTone(v) {
           <span>封单 {{ plan.leader.sealRatio }}%</span>
           <span>换手 {{ plan.leader.turnover }}%</span>
           <span>{{ plan.leader.floatCapYi }} 亿</span>
+          <span
+            v-if="plan.leader.nuclearLevel && plan.leader.nuclearLevel !== 'low'"
+            class="nuke-chip"
+            :class="`is-${plan.leader.nuclearLevel}`"
+          >防核按钮 {{ plan.leader.nuclearScore }}</span>
+          <span
+            v-else-if="plan.leader.nuclearNextLevel && plan.leader.nuclearNextLevel !== 'low'"
+            class="nuke-chip"
+            :class="`is-${plan.leader.nuclearNextLevel}`"
+          >明日防核按钮 {{ plan.leader.nuclearNextScore }}</span>
         </div>
         <p class="leader-thesis">{{ plan.leader.thesis }}</p>
         <ul class="leader-why">
@@ -198,6 +209,16 @@ function tierTone(v) {
                 <span class="promo-board">{{ item.lbc }} 板</span>
                 <span class="promo-sector">{{ item.sector }}</span>
                 <span class="promo-node">{{ item.nodeLabel }} {{ item.nodeScore }}</span>
+                <span
+                  v-if="item.nuclearLevel && item.nuclearLevel !== 'low'"
+                  class="nuke-chip"
+                  :class="`is-${item.nuclearLevel}`"
+                >核按钮风险 {{ item.nuclearScore }}</span>
+                <span
+                  v-else-if="item.nuclearNextLevel && item.nuclearNextLevel !== 'low'"
+                  class="nuke-chip"
+                  :class="`is-${item.nuclearNextLevel}`"
+                >明日防核按钮 {{ item.nuclearNextScore }}</span>
               </div>
               <p class="promo-thesis">{{ item.thesis }}</p>
               <p class="promo-why">{{ item.why[0] }}</p>
@@ -242,6 +263,11 @@ function tierTone(v) {
               <b>{{ item.name }}</b>
               <span class="promo-board">{{ item.lbc }} 板</span>
               <span class="promo-sector">{{ item.sector }}</span>
+              <span
+                v-if="item.nuclearLevel && item.nuclearLevel !== 'low'"
+                class="nuke-chip"
+                :class="`is-${item.nuclearLevel}`"
+              >核按钮风险 {{ item.nuclearScore }}</span>
             </div>
             <p>{{ item.riskShort }} · {{ item.nodeLabel }} {{ item.nodeScore }}</p>
           </div>
@@ -252,6 +278,39 @@ function tierTone(v) {
         </div>
         <p class="promo-foot">
           最高板只作为情绪风向标；炸板多 / 尾盘板 / 板块 0 关不进入晋级榜。
+        </p>
+      </div>
+
+      <div v-if="nuclearWatch.length" class="nuclear-panel">
+        <div class="promo-head">
+          <span>三板组核按钮 · 只看不接</span>
+          <span>小盘缩量 / 无主线 / 封单异常</span>
+        </div>
+        <div
+          v-for="item in nuclearWatch"
+          :key="item.code"
+          class="nuclear-row"
+          :class="`is-${item.nuclearLevel}`"
+        >
+          <div class="nuclear-main">
+            <div class="promo-title">
+              <b>{{ item.name }}</b>
+              <span class="promo-board">{{ item.lbc }} 板</span>
+              <span class="promo-sector">{{ item.sector || '无板块' }}</span>
+              <span class="nuke-chip" :class="`is-${item.nuclearLevel}`">
+                核按钮 {{ item.nuclearScore }}
+              </span>
+            </div>
+            <p>{{ item.reasons.join('；') }}</p>
+          </div>
+          <div class="nuclear-next">
+            冲 {{ item.board }} 板
+            <em>{{ item.nuclearLevel === 'high' ? '高危' : '警惕' }}</em>
+          </div>
+        </div>
+        <p class="promo-foot">
+          三板组 = 小盘冷门票用一字 / T 字缩量加速到 3–4 板，封单极大、没有板块主线，
+          随后在竞价撤单往下砸（核按钮），常见天地板 / A 杀。高分票不进晋级榜与预警，只在这里提示。
         </p>
       </div>
 
@@ -351,6 +410,11 @@ function tierTone(v) {
                 <span class="promo-sector">{{ item.sector }}</span>
               </div>
               <span class="hotshot-bucket">{{ item.bucketLabel }}</span>
+              <span
+                v-if="item.nuclearLevel && item.nuclearLevel !== 'low'"
+                class="nuke-chip"
+                :class="`is-${item.nuclearLevel}`"
+              >防核按钮 {{ item.nuclearScore }}</span>
               <span class="hotshot-score">审美 {{ item.score }}</span>
             </div>
             <div class="hotshot-tags">
@@ -1195,6 +1259,75 @@ function tierTone(v) {
   font-family: var(--mono);
   font-size: 15px;
   color: var(--warn);
+}
+
+.nuke-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 84, 96, 0.32);
+  background: rgba(255, 84, 96, 0.09);
+  color: #ffb0b5;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.nuke-chip.is-mid {
+  border-color: rgba(255, 180, 94, 0.3);
+  background: rgba(255, 180, 94, 0.08);
+  color: var(--warn);
+}
+
+.nuclear-panel {
+  border-top: 1px solid var(--line);
+}
+
+.nuclear-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-left: 2px solid var(--warn);
+}
+
+.nuclear-row.is-high {
+  border-left-color: var(--up);
+  background: rgba(255, 84, 96, 0.045);
+}
+
+.nuclear-main {
+  min-width: 0;
+}
+
+.nuclear-main p {
+  margin: 4px 0 0;
+  font-size: 10.8px;
+  line-height: 1.6;
+  color: rgba(255, 176, 181, 0.88);
+}
+
+.nuclear-next {
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+.nuclear-next em {
+  display: block;
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--warn);
+}
+
+.nuclear-row.is-high .nuclear-next em {
+  color: var(--up);
 }
 
 .reject-toggle {

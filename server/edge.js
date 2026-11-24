@@ -880,6 +880,118 @@ function sealProfileOf(stock) {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * 三板组 / 核按钮风险
+ * 短线话术里的“三板组 / 三哥”不是“同高度的三板”：
+ * 是一批专做小盘冷门票的资金，用一字 / T 字缩量加速做到 3–4 板，
+ * 封单极大、换手极小，然后在 3–4 板竞价或早盘撤掉封单往下砸（核按钮），
+ * 常见天地板 / A 杀。识别重点是“小流通 + 一字加速 + 无主线 + 从未分歧”，
+ * 与同高度家数无关。这里只输出风险分；高风险不进前排与预警，只留观察。
+ * ------------------------------------------------------------------ */
+function nuclearRiskOf({ stock, sector, board, seal, sameHeight }) {
+  const s = stock || {}
+  const b = num(board, 0)
+  if (b < 3) return { score: 0, level: 'low', reasons: [], short: '', board: b }
+  const capYi = num(s.floatCap, 0) / 1e8
+  const turnover = num(s.turnover, 0)
+  const sealRatio =
+    seal && seal.sealRatio != null ? num(seal.sealRatio, 0) : num(s.sealRatio, 0)
+  const minutes =
+    seal && seal.minutes != null ? num(seal.minutes, 0) : sealMinutesFromOpen(s.firstSeal)
+  const blow = num(s.blowCount, 0)
+  const sectorReady = !!(sector && sector.dataReady)
+  const gates = num(sector && sector.gatesPassed, 0)
+  const heat = num(sector && sector.heat, 0)
+  const todayCount = num(sector && sector.todayCount, 0)
+  const reasons = []
+  let score = b === 4 ? 12 : b === 3 ? 8 : 4
+
+  if (capYi > 0 && capYi <= 15) {
+    score += 20
+    reasons.push(`流通 ${round(capYi, 1)} 亿，小盘容易被控盘`)
+  } else if (capYi > 0 && capYi <= 30) {
+    score += 14
+    reasons.push(`流通 ${round(capYi, 1)} 亿，小盘容易被控盘`)
+  } else if (capYi > 0 && capYi <= 40) {
+    score += 8
+  }
+  if (turnover > 0 && turnover <= 2) {
+    score += 18
+    reasons.push(`换手 ${round(turnover, 1)}%，一字/T 字加速，从未分歧`)
+  } else if (turnover > 0 && turnover <= 3.5) {
+    score += 12
+    reasons.push(`换手 ${round(turnover, 1)}%，缩量加速`)
+  } else if (turnover > 0 && turnover <= 5) {
+    score += 6
+  }
+  if (capYi > 0 && capYi <= 40 && turnover > 0 && turnover <= 5) {
+    reasons.push(`小盘缩量：${round(capYi, 1)} 亿 / 换手 ${round(turnover, 1)}%`)
+  }
+  if (minutes > 0 && minutes <= 5) {
+    score += 8
+    reasons.push(`开盘 ${sealTimeLabel(s.firstSeal)} 即封，典型一字/T 字`)
+  } else if (minutes > 0 && minutes <= 15) {
+    score += 5
+  }
+  if (sealRatio >= 5) {
+    score += 12
+    reasons.push(`封单占流通 ${round(sealRatio, 1)}%，超大封单有诱多可能`)
+  } else if (sealRatio >= 3) {
+    score += 8
+    reasons.push(`封单占流通 ${round(sealRatio, 1)}%，封单偏大`)
+  } else if (sealRatio >= 1.5) {
+    score += 4
+  }
+  if (blow === 0 && turnover > 0 && turnover <= 5) score += 6
+  if (!sector) {
+    score += 12
+    reasons.push('无板块归属，冷门孤票')
+  } else if (todayCount <= 1) {
+    score += 10
+    reasons.push(`板块「${sector.name}」仅 ${todayCount} 家，不是主线`)
+  } else if (heat < 30) {
+    score += 6
+  }
+  if (!sectorReady) score += gates >= 2 ? 2 : 6
+  if (sectorReady && heat >= 60 && todayCount >= 5) score -= 18
+  else if (gates >= 2) score -= 10
+  if (turnover >= 8) score -= 8
+  if (turnover >= 12) score -= 8
+  if (blow > 0) score -= 4
+  if (sameHeight >= 4) score -= 3
+
+  /* 经典三哥组合：小盘 + 极低换手 + 超大封单 / 开盘秒封，即使挂靠主线也照样防 */
+  const classic =
+    capYi > 0 &&
+    capYi <= 30 &&
+    turnover > 0 &&
+    turnover <= 3.5 &&
+    (sealRatio >= 5 || (minutes > 0 && minutes <= 5 && blow === 0 && sealRatio >= 1.5))
+  if (classic) {
+    score = Math.max(score, 56)
+    reasons.unshift(
+      `经典三板组形态：${round(capYi, 1)} 亿 / 换手 ${round(turnover, 1)}% / 封单 ${round(
+        sealRatio,
+        1
+      )}%`
+    )
+  }
+
+  score = Math.round(clamp(score, 0, 100))
+  const level = score >= 52 ? 'high' : score >= 32 ? 'mid' : 'low'
+  const uniq = Array.from(new Set(reasons))
+  if (level !== 'low' && !uniq.length) {
+    uniq.push(`缩量加速到 ${b} 板，缺少分歧检验，防核按钮`)
+  }
+  return {
+    score,
+    level,
+    reasons: uniq.slice(0, 4),
+    short: uniq.slice(0, 2).join(' / '),
+    board: b
+  }
+}
+
 function turnoverQualityOf(turnover) {
   const t = num(turnover, 0)
   if (t <= 0) return 50
@@ -955,8 +1067,16 @@ function planItemOf(x, rank) {
     sectorReady: !!(x.sector && x.sector.dataReady),
     sectorGates: x.sector ? num(x.sector.gatesPassed, 0) : 0,
     sameHeight: x.sameHeight,
-    threeCrowd: x.threeCrowd,
+    heightCrowd: x.heightCrowd,
     midTrap: x.midTrap,
+    nuclearLevel: x.nuclear ? x.nuclear.level : 'low',
+    nuclearScore: x.nuclear ? x.nuclear.score : 0,
+    nuclearShort: x.nuclear ? x.nuclear.short : '',
+    nuclearReasons: x.nuclear ? x.nuclear.reasons.slice(0, 3) : [],
+    nuclearNextLevel: x.nuclearNext ? x.nuclearNext.level : 'low',
+    nuclearNextScore: x.nuclearNext ? x.nuclearNext.score : 0,
+    nuclearNextShort: x.nuclearNext ? x.nuclearNext.short : '',
+    nuclearNextBoard: x.nuclearNext ? x.nuclearNext.board : null,
     weakLabel: (stock.weak && stock.weak.label) || '',
     thesis: x.thesis,
     why: x.why.slice(0, 4),
@@ -1112,7 +1232,7 @@ function hotshotPlanOf(x) {
   return {
     bucket: 'third',
     bucketLabel: '三板以上 · 只观察',
-    entry: ['三板组与中位三板不进入打板候选，只作为情绪风向标。'],
+    entry: ['三板组核按钮 / 同高度拥挤 / 中位断层不进入打板候选，只作为情绪风向标。'],
     giveUp: '不接中位、不接后排。',
     position: '0 成观察。'
   }
@@ -1143,7 +1263,8 @@ function buildHotshotSection(items) {
       if (!item.sector || !sectorOk(item)) return false
       if (num(item.stock.blowCount, 0) >= 3 || num(item.stock.turnover, 0) > 40) return false
       if (item.seal.late || item.seal.sealRatio < 0.7) return false
-      if (item.threeCrowd || item.midTrap) return false
+      if (item.heightCrowd || item.midTrap) return false
+      if (item.nuclear && item.nuclear.level === 'high') return false
       if (item.lbc === 3 && item.node.role === 'follower') return false
       return item.hotScore >= 62
     })
@@ -1167,7 +1288,9 @@ function buildHotshotSection(items) {
       /* 只做板块龙一：龙一是 3 板或不在 1–2 板范围时，宁可空仓，不拿跟随卡位 */
       if (!x.hotPosition || !x.hotPosition.leader) return false
       if (x.node.tone === 'risk') return false
-      if (x.threeCrowd || x.midTrap) return false
+      if (x.heightCrowd || x.midTrap) return false
+      if (x.nuclear && x.nuclear.level === 'high') return false
+      if (x.nuclearNext && x.nuclearNext.level === 'high') return false
       if (!x.seal || x.seal.late || x.seal.sealRatio < 0.7) return false
       if (num(stock.turnover, 0) > 30) return false
       const capYi = num(stock.floatCap, 0) / 1e8
@@ -1207,6 +1330,9 @@ function buildHotshotSection(items) {
   const whyWatch = (x) => {
     if (!x.sector || !x.sector.dataReady) {
       return `板块三关未全过（${num(x.sector && x.sector.gatesPassed, 0)}/3），只观察，不进明日待选`
+    }
+    if (x.nuclearNext.level === 'high') {
+      return `明日冲 ${x.lbc + 1} 板，三板组核按钮风险 ${x.nuclearNext.score} 分：${x.nuclearNext.short}`
     }
     if (!x.hotPosition || !x.hotPosition.leader) {
       const lead =
@@ -1300,6 +1426,9 @@ function buildHotshotSection(items) {
     const risks = Array.from(
       new Set([
         ...x.risks,
+        x.nuclearNext.level !== 'low'
+          ? `明日冲 ${x.lbc + 1} 板，防核按钮：${x.nuclearNext.short}`
+          : '',
         !x.hotPosition.leader ? '板块内不是龙一，竞价必须确认卡位' : '',
         !x.sector.dataReady ? '板块三关未全过，只能按热度 / 家数参考' : '',
         x.lbc === 2 && num(x.stock.turnover, 0) < 1.5
@@ -1325,6 +1454,8 @@ function buildHotshotSection(items) {
       turnover: round(x.stock.turnover, 1),
       blowCount: num(x.stock.blowCount, 0),
       floatCapYi: capYi,
+      nuclearLevel: x.nuclearNext.level,
+      nuclearScore: x.nuclearNext.score,
       sectorHeat: num(x.sector.heat, 0),
       sectorGates: num(x.sector.gatesPassed, 0),
       sectorCount: num(x.sector.todayCount, 0),
@@ -1374,7 +1505,8 @@ function buildHotshotSection(items) {
       '20cm 标的（科创板 688/689、创业板 300/301）不进入今日命中、明日待选与观察清单；涨停统计仍按全市场。',
       '北京炒家偏好首板套利、板块效应与缩量二板；92科比只做高位龙头或低位首板 / 一进二，避开中位；全能的野人强调龙空龙，不是龙一就空仓。以上来自公开访谈与复盘总结，未验证其宣称胜率。',
       '板块采用行业板块口径，和概念题材不完全等价；打板前必须人工核对催化与同板块是否真的一条主线。',
-      '缩量二板是加分项，但开板承接未知；首板换手过低多是关注度不足。'
+      '缩量二板是加分项，但开板承接未知；首板换手过低多是关注度不足。',
+      '三板组核按钮：小盘冷门票一字 / T 字缩量加速到 3–4 板、封单异常大、无板块主线，明日冲板前就剔除；中风险标“防核按钮”。'
     ]
   }
 }
@@ -1443,6 +1575,8 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     const sameHeight = sameHeightMap.get(lbc) || 0
     const node = nodeModelOf(stock, sector, s)
     const seal = sealProfileOf(stock)
+    const nuclear = nuclearRiskOf({ stock, sector, board: lbc, seal, sameHeight })
+    const nuclearNext = nuclearRiskOf({ stock, sector, board: lbc + 1, seal, sameHeight })
     const sectorQ = sectorQualityOf(sector)
     const turnQ = turnoverQualityOf(stock.turnover)
     const weakScore = num(stock.weak && stock.weak.score, 55)
@@ -1461,7 +1595,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       ),
       1
     )
-    const threeCrowd = lbc === 3 && sameHeight >= 2 && lbc < maxBoard
+    const heightCrowd = lbc === 3 && sameHeight >= 2 && lbc < maxBoard
     const midTrap = lbc >= 3 && lbc < maxBoard && maxBoard - lbc >= 2
     const packMult = sameHeight >= 10 ? 0.78 : sameHeight >= 6 ? 0.85 : sameHeight >= 3 ? 0.92 : 1
     let penalty = 1
@@ -1472,8 +1606,12 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     if (seal.thin) penalty *= 0.92
     if (seal.late) penalty *= 0.9
     if (lbc >= 2) penalty *= packMult
-    if (threeCrowd) penalty *= 0.78
+    if (heightCrowd) penalty *= 0.78
     if (midTrap) penalty *= 0.85
+    if (nuclear.level === 'high') penalty *= 0.72
+    else if (nuclear.level === 'mid') penalty *= 0.88
+    if (nuclearNext.level === 'high') penalty *= 0.8
+    else if (nuclearNext.level === 'mid') penalty *= 0.94
     if (node.role === 'follower') penalty *= 0.85
     if (!sector) penalty *= 0.82
     else {
@@ -1514,6 +1652,14 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     }
 
     const risks = []
+    if (nuclear.level === 'high') {
+      risks.push(`三板组核按钮风险 ${nuclear.score} 分：${nuclear.short}`)
+    } else if (nuclearNext.level === 'high') {
+      risks.push(`明日冲 ${lbc + 1} 板，核按钮风险 ${nuclearNext.score} 分：${nuclearNext.short}`)
+    } else if (nuclear.level === 'mid' || nuclearNext.level === 'mid') {
+      const nk = nuclear.level === 'mid' ? nuclear : nuclearNext
+      risks.push(`缩量加速，防 ${nk.board} 板核按钮：${nk.short}`)
+    }
     if (num(stock.blowCount, 0) > 0) {
       risks.push(`炸板 ${num(stock.blowCount, 0)} 次，封板稳定性待确认`)
     }
@@ -1541,6 +1687,13 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       if (!duplicate) risks.push(risk)
     }
     const riskShort = [
+      nuclear.level === 'high'
+        ? '核按钮高风险'
+        : nuclearNext.level === 'high'
+          ? '明日防核按钮'
+          : nuclear.level === 'mid' || nuclearNext.level === 'mid'
+            ? '缩量防核按钮'
+            : '',
       num(stock.blowCount, 0) >= 3 ? `${num(stock.blowCount, 0)} 次炸板` : '',
       num(stock.turnover, 0) >= 50
         ? `换手 ${round(stock.turnover, 0)}%`
@@ -1555,9 +1708,22 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       .slice(0, 3)
       .join(' / ')
     let riskLevel = 'ok'
-    if (node.tone === 'risk' || num(stock.blowCount, 0) >= 4 || num(stock.turnover, 0) >= 50) {
+    if (nuclear.level === 'high') {
       riskLevel = 'high'
-    } else if (seal.late || seal.thin || midTrap || (sector && num(sector.gatesPassed, 0) < 1)) {
+    } else if (
+      node.tone === 'risk' ||
+      num(stock.blowCount, 0) >= 4 ||
+      num(stock.turnover, 0) >= 50
+    ) {
+      riskLevel = 'high'
+    } else if (
+      nuclear.level === 'mid' ||
+      nuclearNext.level !== 'low' ||
+      seal.late ||
+      seal.thin ||
+      midTrap ||
+      (sector && num(sector.gatesPassed, 0) < 1)
+    ) {
       riskLevel = 'mid'
     }
     const hot = hotshotProfileOf({
@@ -1587,8 +1753,10 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       penaltyMult: round(penalty, 2),
       promoProb,
       promoQuality,
-      threeCrowd,
+      heightCrowd,
       midTrap,
+      nuclear,
+      nuclearNext,
       riskLevel,
       riskShort: riskShort || '结构一般',
       thesis: nodeThesisOf(node, maxBoard),
@@ -1614,8 +1782,10 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
         num(x.stock.turnover, 0) <= 30 &&
         x.seal.sealRatio >= 0.7 &&
         !x.seal.late &&
-        !x.threeCrowd &&
+        !x.heightCrowd &&
         !x.midTrap &&
+        x.nuclear.level !== 'high' &&
+        x.nuclearNext.level !== 'high' &&
         x.node.role !== 'follower' &&
         x.sector &&
         (x.sector.dataReady ||
@@ -1661,6 +1831,39 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     )
     .slice(0, 3)
   const watchSet = new Set(heightWatch.map((x) => x.stock.code))
+  const highNuclear = recommendable.filter(
+    (x) => x.nuclear.level === 'high' || x.nuclearNext.level === 'high'
+  )
+  const nuclearWatch = recommendable
+    .filter(
+      (x) =>
+        (x.nuclear.level !== 'low' || x.nuclearNext.level !== 'low') &&
+        !qualifiedSet.has(x.stock.code) &&
+        !watchSet.has(x.stock.code)
+    )
+    .sort(
+      (a, b) =>
+        Number(b.nuclear.level === 'high' || b.nuclearNext.level === 'high') -
+          Number(a.nuclear.level === 'high' || a.nuclearNext.level === 'high') ||
+        Math.max(b.nuclear.score, b.nuclearNext.score) -
+          Math.max(a.nuclear.score, a.nuclearNext.score) ||
+        b.lbc - a.lbc
+    )
+    .slice(0, 3)
+    .map((x) => {
+      const nk = x.nuclear.level !== 'low' ? x.nuclear : x.nuclearNext
+      return {
+        code: x.stock.code,
+        name: x.stock.name,
+        sector: x.sector ? x.sector.name : null,
+        lbc: x.lbc,
+        board: nk.board,
+        nuclearScore: nk.score,
+        nuclearLevel: nk.level,
+        reasons: nk.reasons.slice(0, 3),
+        promoProb: x.promoProb
+      }
+    })
 
   function junkReasons(x) {
     const reasons = []
@@ -1671,7 +1874,17 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
         `炸板 ${blow} 次${turnover >= 25 ? ` / 换手 ${round(turnover, 1)}%` : ''}，封板质量不合格`
       )
     }
-    if (x.threeCrowd) reasons.push(`三板组 ${x.sameHeight} 家，非唯一核心`)
+    if (x.nuclear.level === 'high') {
+      reasons.push(`三板组核按钮风险 ${x.nuclear.score} 分：${x.nuclear.short}`)
+    } else if (x.nuclearNext.level === 'high') {
+      reasons.push(
+        `明日冲 ${x.lbc + 1} 板，核按钮风险 ${x.nuclearNext.score} 分：${x.nuclearNext.short}`
+      )
+    } else if (x.nuclear.level === 'mid' || x.nuclearNext.level === 'mid') {
+      const nk = x.nuclear.level === 'mid' ? x.nuclear : x.nuclearNext
+      reasons.push(`缩量加速，防 ${nk.board} 板核按钮：${nk.short}`)
+    }
+    if (x.heightCrowd) reasons.push(`同高度 ${x.sameHeight} 家，卡位拥挤`)
     else if (x.midTrap) reasons.push(`距顶 ${maxBoard - x.lbc} 板，中位股先挨分歧`)
     if (x.seal.late) reasons.push(`首封 ${sealTimeLabel(x.stock.firstSeal)}，主动性不足`)
     if (x.seal.thin) reasons.push(`封单 ${round(x.seal.sealRatio, 2)}% 偏薄`)
@@ -1706,17 +1919,22 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     nodeScore: x.node.score,
     nodeLabel: x.node.label,
     nodeTone: x.node.tone,
-    category: x.threeCrowd
-      ? '三板组'
-      : x.midTrap
-        ? '中位三板'
-        : x.node.tone === 'risk'
-          ? '脏板'
-          : x.seal.late
-            ? '尾盘板'
-            : x.node.role === 'follower'
-              ? '后排跟随'
-              : '杂毛',
+    category:
+      x.nuclear.level === 'high'
+        ? '三板组核按钮'
+        : x.nuclearNext.level === 'high'
+          ? '明日核按钮'
+          : x.heightCrowd
+            ? '同高度拥挤'
+            : x.midTrap
+              ? '中位断层'
+              : x.node.tone === 'risk'
+                ? '脏板'
+                : x.seal.late
+                  ? '尾盘板'
+                  : x.node.role === 'follower'
+                    ? '后排跟随'
+                    : '杂毛',
     reasons: junkReasons(x)
   }))
 
@@ -1733,7 +1951,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     blowRate >= 30 ||
     highRisk ||
     heightWatch.length > 0 ||
-    items.some((x) => x.threeCrowd) ||
+    highNuclear.length > 0 ||
     !!topGap
 
   const leadNames = qualified
@@ -1763,7 +1981,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       label: '只观察 · 等新核心',
       tone: 'dim',
       position: '0 成观察',
-      summary: `环境不差但前排全部不合格：高位脏板、后排杂毛、三板组都不接。等新的干净核心出现，不为了交易而交易。`
+      summary: `环境不差但前排全部不合格：高位脏板、后排杂毛、三板组核按钮都不接。等新的干净核心出现，不为了交易而交易。`
     }
   } else if (divergence) {
     action = {
@@ -1779,7 +1997,10 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
           heightWatch.length
             ? `高位 ${heightWatch.map((x) => x.stock.name).join('、')} 不适合接力，`
             : ''
-        }${items.some((x) => x.threeCrowd) ? '三板组拥挤，' : ''}` +
+        }${highNuclear.length ? `三板组核按钮风险 ${highNuclear.length} 只（${highNuclear
+            .slice(0, 2)
+            .map((x) => x.stock.name)
+            .join('、')}），` : ''}` +
         `所以明天只做 ${leadNames} 的分歧回封，不追高、不接后排。`
     }
   } else if (signal.attack) {
@@ -1820,9 +2041,16 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     '新周期：若出现新题材 ≥ 3 家首板且龙头一字，老核心降为观察，等第二日确认。'
   ]
   action.doNot = [
-    ...heightWatch.slice(0, 2).map((x) => `不接 ${x.stock.name}：${x.riskShort}`),
+    ...highNuclear.slice(0, 2).map((x) => {
+      const nk = x.nuclear.level === 'high' ? x.nuclear : x.nuclearNext
+      return `不接 ${x.stock.name}：三板组核按钮风险 ${nk.score} 分，${nk.short}`
+    }),
+    ...heightWatch
+      .filter((x) => !highNuclear.includes(x))
+      .slice(0, 2)
+      .map((x) => `不接 ${x.stock.name}：${x.riskShort}`),
     ...rejectedPool
-      .filter((x) => x.lbc >= 3)
+      .filter((x) => x.lbc >= 3 && x.nuclear.level !== 'high' && x.nuclearNext.level !== 'high')
       .slice(0, 1)
       .map((x) => `不接 ${x.stock.name}（${x.lbc} 板）：${junkReasons(x)[0]}`),
     ...(topGap ? [`不把 ${topGap} 板断层期的孤板默认当总龙头`] : []),
@@ -1858,7 +2086,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
   const threeBoardItems = recommendable.filter((x) => x.lbc === 3)
   const threeBoardText = threeBoardItems.length
     ? threeBoardItems
-        .map((x) => `${x.stock.name}（${x.riskShort}${x.midTrap ? ' / 中位三板' : ''}）`)
+        .map((x) => `${x.stock.name}（${x.riskShort}${x.midTrap ? ' / 中位断层' : ''}）`)
         .join('、')
     : '3 板断档'
   const review = [
@@ -1879,6 +2107,14 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
             .join('、')}${qualifiedAll.length > 3 ? ' 等' : ''}）`
         : ''
     }；剔除 ${rejectedPool.length + heightWatch.length} 只（高位观察 ${heightWatch.length} · 后排剔除 ${rejectedPool.length}）。`,
+    `风险：三板组核按钮 ${highNuclear.length} 只${
+      highNuclear.length
+        ? `（${highNuclear
+            .slice(0, 3)
+            .map((x) => x.stock.name)
+            .join('、')}）`
+        : ''
+    }；同高度拥挤只是卡位竞争，不是三板组，两个口径不混用。`,
     '口径：涨停家数与高度统计为全市场；推荐、晋级榜、龙头与明日待选剔除科创板 688/689、创业板 300/301 的 20cm。'
   ]
 
@@ -1892,6 +2128,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     promotionRank: qualified.map((x) => planItemOf(x, x.rank)),
     hotshot: buildHotshotSection(recommendable),
     heightWatch: heightWatch.map((x) => planItemOf(x, null)),
+    nuclearWatch,
     rejected: {
       total: rejectedPool.length,
       samples: rejectedSamples
@@ -1907,7 +2144,8 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     firstCount,
     twoBoardCount,
     threeBoardCount,
-    threeCrowdCount: items.filter((x) => x.threeCrowd).length,
+    heightCrowdCount: items.filter((x) => x.heightCrowd).length,
+    nuclearHighCount: highNuclear.length,
     qualifiedCount: qualifiedAll.length,
     rejectedCount: rejectedPool.length + heightWatch.length,
     baseRates: { first: firstBase, continuation: contBase },
@@ -1917,7 +2155,8 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
         ? `今日连板晋级实测样本仅 ${contTotal} 只（${contPromoted}/${contTotal}），平滑后 ${contBase}% 主要受先验约束；小样本不能外推为明日真实胜率。`
         : `今日连板晋级实测 ${contPromoted}/${contTotal}（${contBase}%），已做先验平滑，仍需明日竞价与板块共振验证。`,
       `首板 ${firstCount} 家不逐一给概率，只统计首板→二板整体水平（平滑后 ${firstBase}%）。`,
-      '三板组 = 同高度 ≥2 且非最高板，默认剔除；距顶两板以上的中位三板也不进前排。',
+      '三板组不是“同高度三板”：指小盘冷门票用一字 / T 字缩量加速到 3–4 板，封单极大、没有板块主线、从未分歧，随后在竞价撤单往下砸（核按钮），常见天地板 / A 杀。高风险不进前排与预警，只列观察。',
+      '同高度 ≥2 且非最高板只是“同高度拥挤”，是卡位竞争；距顶 ≥2 板是“中位断层”。两者都不是三板组。',
       '弱势切核心抱团、分歧切核心：都只做最强核心，后排杂毛不参与。',
       '研究用途，不构成投资建议；样本外失效、风格切换都可能导致亏损。'
     ]
@@ -2530,6 +2769,15 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       }
     })
     const node = nodeModelOf({ ...c, weak }, sector, dashboard.sentiment)
+    /* 昨日 lbc 板，今天冲 lbc+1 板；3–4 板正是三板组核按钮高发区 */
+    const boardToday = c.fromPool ? Math.max(1, num(c.lbc, 0) + 1) : 1
+    const nuclear = nuclearRiskOf({
+      stock: c,
+      sector,
+      board: boardToday,
+      seal: sealProfileOf(c),
+      sameHeight: 0
+    })
 
     let score
     if (stage.intraday) {
@@ -2553,6 +2801,8 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
         score = Math.max(score, Math.min(96, gene.score + 2))
       }
     }
+    /* 核按钮高风险：分数压低，不能给“可执行候选”的错觉 */
+    if (nuclear.level === 'high') score = Math.round(score * 0.78)
 
     let status = 'drop'
     let auctionHard = false
@@ -2577,6 +2827,10 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       else if (stage.key === 'final' && sealedNow && c.amount != null && c.amount >= 1e7) status = 'confirm'
       else if (score >= 55 && pct >= 0.5) status = 'watch'
       if (stage.key === 'trial' && status === 'confirm') status = 'watch'
+    }
+    if (nuclear.level === 'high') {
+      auctionHard = false
+      if (status === 'confirm') status = 'watch'
     }
 
     const reasons = []
@@ -2625,6 +2879,13 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     )
 
     const risks = []
+    if (nuclear.level === 'high') {
+      risks.push(
+        `三板组核按钮风险 ${nuclear.score} 分：${nuclear.short}；今日冲 ${boardToday} 板不接`
+      )
+    } else if (nuclear.level === 'mid') {
+      risks.push(`缩量加速，防 ${boardToday} 板核按钮：${nuclear.short}`)
+    }
     if (stage.intraday) {
       if (!sealedNow) risks.push('尚未封板，冲板失败回落风险')
       if (sealedNow && c.sealFund != null && c.sealFund < 2e7) risks.push('封单不足 2000 万，容易开板')
@@ -2656,6 +2917,8 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     }
     if (liveStrong >= 2) tags.push('板块共振')
     if (c.fromPool && c.lbc >= 3) tags.push('昨日高位')
+    if (nuclear.level === 'high') tags.push('三板组高危')
+    else if (nuclear.level === 'mid') tags.push('防核按钮')
     if (c.sectorReady) tags.push('三关通过')
     if (!c.fromPool) tags.push(c.scanned ? '全市场扫描' : '非涨停池')
     if (weak && weak.score >= 66) tags.push(weak.label)
@@ -2688,6 +2951,8 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       volRatio: c.volRatio,
       quoteTime: c.quoteTime,
       firstSealLabel: c.firstSealLabel,
+      firstSeal: c.firstSeal,
+      floatCap: c.floatCap,
       sealRatio: round(c.sealRatio, 2),
       sealFund: c.sealFund == null ? null : c.sealFund,
       sealed: sealedNow,
@@ -2695,6 +2960,9 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       bid1Vol: c.bid1Vol,
       turnover: c.turnover != null ? round(c.turnover, 2) : null,
       blowCount: c.blowCount,
+      nuclearScore: nuclear.score,
+      nuclearLevel: nuclear.level,
+      nuclearShort: nuclear.short,
       score,
       geneScore: gene.score,
       node,
@@ -2764,6 +3032,9 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   if (stage.key === 'trial') notes.push('试撮阶段的数据会撤单、重挂，任何结论都必须等到 9:20 之后复核。')
   if (stage.key === 'final') notes.push('竞价定稿后仍需看 9:30 后是否放量承接；高开低走按失败处理。')
   notes.push('本榜与预警剔除科创板 688/689、创业板 300/301 的 20cm 标的；20cm 不进入推荐，也不弹窗。')
+  notes.push(
+    '另剔除“三板组 / 核按钮”高风险：小盘冷门票用一字 / T 字缩量加速到 3–4 板、封单极大、无板块主线，常在竞价撤单砸盘；高分也不进推荐，只在候选卡上标红。'
+  )
   if (stage.frozen) notes.push('午间冻结：价格不再变化，13:00 后再看资金是否继续；推荐时间保留上午首次出现的记录。')
   if (quoteResult.stale) notes.push('行情返回了缓存快照，请留意时间戳。')
   notes.push('推荐与预警时间由服务端首次出现时刻记录，页面刷新后仍保留；预警分与实时分不是同一口径。')
@@ -2865,6 +3136,8 @@ function auctionAlertScore(x, intraday = false) {
   const gene = num(x.geneScore, 0)
   const sectorPart = auctionAlertSectorPart(x)
   const poolPart = x.fromPool ? 100 : 60
+  /* 缩量加速的“防核按钮”票降权；高风险已在 eligible 直接剔除 */
+  const nukePenalty = x.nuclearLevel === 'mid' ? 5 : 0
   if (intraday) {
     const nearPart = auctionAlertNearPart(x.gapToLimit)
     const volPart = auctionAlertVolPart(x.volRatio)
@@ -2873,12 +3146,13 @@ function auctionAlertScore(x, intraday = false) {
         gene * 0.45 + nearPart * 0.25 + volPart * 0.15 + sectorPart * 0.1 + poolPart * 0.05,
         0,
         100
-      )
+      ) - nukePenalty
     )
   }
   const pctPart = auctionAlertPctPart(num(x.pct, 0))
   return Math.round(
-    clamp(gene * 0.5 + pctPart * 0.3 + sectorPart * 0.12 + poolPart * 0.08, 0, 100)
+    clamp(gene * 0.5 + pctPart * 0.3 + sectorPart * 0.12 + poolPart * 0.08, 0, 100) -
+      nukePenalty
   )
 }
 
@@ -2893,6 +3167,8 @@ function auctionAlertEligible(x, intraday = false) {
   const pct = num(x.pct, null)
   if (pct == null || pct < ALERT_MIN_PCT || pct > ALERT_MAX_PCT) return false
   if (num(x.geneScore, 0) < ALERT_MIN_GENE) return false
+  /* 三板组核按钮高风险不提醒：缩量小盘加速到 3–4 板，撤单砸盘风险不可控 */
+  if (x.nuclearLevel === 'high') return false
   /* 板块三关通过，或板块涨停 ≥5 家，二者至少满足一项 */
   if (!x.sectorReady && num(x.sectorTodayCount, 0) < 5) return false
   /* 成交额缺失时不臆造；一旦有数据，必须过流动性门槛 */
@@ -2938,6 +3214,11 @@ function buildAlertBoard(items, { stage, tradeDate, now }) {
       sealRatio: x.sealRatio,
       sealFund: x.sealFund == null ? null : x.sealFund,
       firstSealLabel: x.firstSealLabel,
+      firstSeal: x.firstSeal,
+      floatCap: x.floatCap,
+      nuclearScore: x.nuclearScore,
+      nuclearLevel: x.nuclearLevel,
+      nuclearShort: x.nuclearShort,
       blowCount: x.blowCount,
       turnover: x.turnover,
       amount: x.amount,

@@ -54,6 +54,9 @@ function isHotScore(score) {
             <b>{{ r.name }}</b>
             <span class="mono">{{ r.code }}</span>
             <span class="chip chip--gold">{{ r.statusLabel }}</span>
+            <span v-if="r.nuclearLevel === 'mid'" class="chip chip--warn">
+              防核按钮 {{ r.nuclearScore }}
+            </span>
           </div>
           <div class="rec-line">
             <span>{{ r.sector }}</span>

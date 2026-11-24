@@ -781,6 +781,11 @@ onBeforeUnmount(() => {
             <span class="chip" :class="statusChipClass(c)">{{ c.displayLabel }}</span>
             <span class="chip" :class="catChipClass(c.cat)">{{ c.cat.label }}</span>
             <span v-if="c.rec" class="chip chip--gold">预警推荐 {{ c.rec.recommendTime }}</span>
+            <span
+              v-if="c.nuclearLevel && c.nuclearLevel !== 'low'"
+              class="chip"
+              :class="c.nuclearLevel === 'high' ? 'chip--red' : 'chip--warn'"
+            >核按钮风险 {{ c.nuclearScore }}</span>
             <span v-for="tag in c.tags" :key="tag" class="tag">{{ tag }}</span>
             <span
               v-if="auctionActive && c.nodeLabel && !c.tags.includes(c.nodeLabel)"
