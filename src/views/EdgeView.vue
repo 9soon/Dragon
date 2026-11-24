@@ -1,8 +1,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ScoreRing from '../components/ScoreRing.vue'
+import AlertRecommendations from '../components/AlertRecommendations.vue'
 import { getAuction, getDragonProfile, getOvernight } from '../lib/api'
 import { catalystType, isCatalystValid, useCatalysts } from '../lib/catalysts'
+import { currentRecommendations, ingestRecommendations, pastRecommendations } from '../lib/alerts'
 import { openCatalyst, toast, ui } from '../lib/ui'
 import { fmtCap, fmtMoney, fmtNum, fmtPct, fmtPrice, pctTone, timeLabel } from '../lib/format'
 
@@ -126,6 +128,20 @@ const auctionRumorCount = computed(
   () => auctionRaw.value.filter((x) => catFor(x.sectorKey).rumor).length
 )
 
+const recommendationMap = computed(
+  () => new Map(currentRecommendations.value.map((r) => [r.code, r]))
+)
+
+/* 休市后仍保留当日推荐记录；只有当前窗口开着才算“在榜” */
+const recommendationTotal = computed(
+  () => currentRecommendations.value.length + pastRecommendations.value.length
+)
+const recommendationLive = computed(() => {
+  const a = auction.value
+  if (!a || !a.active || !a.stage || a.stage.frozen) return false
+  return ['locked', 'final', 'intraday'].includes(a.stage.key)
+})
+
 const auctionCards = computed(() =>
   auctionRaw.value
     .filter((x) => !catFor(x.sectorKey).rumor)
@@ -147,6 +163,7 @@ const auctionCards = computed(() =>
         ...x,
         cat,
         displayLabel,
+        rec: recommendationMap.value.get(x.code) || null,
         actionable: active && !x.sealed && x.status === 'confirm' && cat.valid
       }
     })
@@ -432,6 +449,15 @@ async function loadAuction({ silent = false } = {}) {
     const data = await getAuction()
     auction.value = data
     auctionError.value = ''
+    if (data && data.active) {
+      ingestRecommendations(data.alertBoard || [], {
+        tradeDate: data.tradeDate,
+        tradeDateLabel: data.tradeDateLabel,
+        stage: data.stage,
+        intraday: data.intraday,
+        pruneActive: data.alertBoardReady !== false
+      })
+    }
   } catch (err) {
     auctionError.value = err.message || '竞价数据读取失败'
   } finally {
@@ -711,6 +737,8 @@ onBeforeUnmount(() => {
           <p>老龙头画像还在回溯历史样本，当前画像匹配只使用基础规则。</p>
         </div>
 
+        <AlertRecommendations v-if="auction.active || recommendationTotal" :live="recommendationLive" />
+
         <header class="section-head">
           <span class="section-title">{{ auction.active ? (auction.intraday ? '盘中强势候选' : '竞价强势候选') : '下一场竞价的准备池' }}</span>
           <span class="section-count">{{ auctionListLabel }}</span>
@@ -736,6 +764,7 @@ onBeforeUnmount(() => {
                 <i v-if="c.lbc">· 昨 {{ c.lbc }} 板</i>
                 <i v-if="c.source">· {{ c.source }}</i>
                 <i v-if="c.sectorHeat != null">· 热度 {{ c.sectorHeat }}</i>
+                <i v-if="c.quoteTime">· 行情 {{ c.quoteTime }}</i>
               </div>
             </div>
             <div class="ac-ring">
@@ -751,6 +780,7 @@ onBeforeUnmount(() => {
           <div class="chip-row">
             <span class="chip" :class="statusChipClass(c)">{{ c.displayLabel }}</span>
             <span class="chip" :class="catChipClass(c.cat)">{{ c.cat.label }}</span>
+            <span v-if="c.rec" class="chip chip--gold">预警推荐 {{ c.rec.recommendTime }}</span>
             <span v-for="tag in c.tags" :key="tag" class="tag">{{ tag }}</span>
             <span
               v-if="auctionActive && c.nodeLabel && !c.tags.includes(c.nodeLabel)"
@@ -894,6 +924,8 @@ onBeforeUnmount(() => {
             <div class="rule-line"><span>04</span><p>炸板不回封、封单快速变薄、跌破分时均线，按失效处理；不补仓、不摊低成本。</p></div>
             <div class="rule-line"><span>05</span><p>板块三关未过或催化未核验，盘中再强也只是观察，不进入执行清单。</p></div>
             <div class="rule-line"><span>06</span><p>只做非双创标的；科创板 688/689、创业板 300/301 的 20cm 不进入榜单和预警。</p></div>
+            <div class="rule-line"><span>07</span><p>预警推荐只保留未封板、距涨停 &gt;0.3 个点且预警分 ≥70 的票，按预警分从强到弱最多 3 只；已封板只排队观察，不弹“买不进”的票。</p></div>
+            <div class="rule-line"><span>08</span><p>推荐时间、最近更新时间保存在浏览器本地，刷新页面不会清空；当前榜单变化只影响“在榜 / 已移出”，不改写首次推荐时间。</p></div>
           </template>
           <template v-else>
             <div class="rule-line"><span>01</span><p>9:15–9:20 可撤单，只看不追；虚假挂单不计入判断。</p></div>
@@ -902,7 +934,8 @@ onBeforeUnmount(() => {
             <div class="rule-line"><span>04</span><p>已封板只标「买不进 / 排队观察」，不进入可执行候选；竞价预警只提醒未涨停票。</p></div>
             <div class="rule-line"><span>05</span><p>高开 > 8% 不追，低开翻绿剔除；9:30 承接失败按失效处理。</p></div>
             <div class="rule-line"><span>06</span><p>板块三关未过或催化未核验，竞价再强也只是观察，不执行。</p></div>
-            <div class="rule-line"><span>07</span><p>只做非双创标的；科创板 688/689、创业板 300/301 的 20cm 不进入榜单和预警，每轮预警最多 1 只。</p></div>
+            <div class="rule-line"><span>07</span><p>只做非双创标的；科创板 688/689、创业板 300/301 的 20cm 不进入榜单和预警。推荐榜最多 3 只、按预警分从强到弱，每轮最多弹 1 只。</p></div>
+            <div class="rule-line"><span>08</span><p>推荐时间与当日已移出记录保存在浏览器本地，刷新页面不会清空；清空记录需在预警中心二次确认。</p></div>
           </template>
         </section>
 

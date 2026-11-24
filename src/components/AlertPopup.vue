@@ -13,7 +13,18 @@ let timer = null
 
 const isSummary = computed(() => !!(props.alert && props.alert.summary))
 const actionable = computed(() => !!(props.alert && props.alert.actionable))
+const isIntraday = computed(
+  () => !!(props.alert && (props.alert.intraday || props.alert.alertMode === 'intraday'))
+)
 const duration = computed(() => (isSummary.value ? 22000 : 16000))
+
+const kickerText = computed(() => {
+  if (!props.alert) return ''
+  const mode = isIntraday.value ? '盘中' : '竞价'
+  if (isSummary.value) return `${mode}预警 · 本轮汇总`
+  if (actionable.value) return `${mode}预警 · ${isIntraday.value ? '可执行' : '可挂单'}`
+  return `${mode}预警 · 观察`
+})
 
 watch(
   () => (props.alert ? props.alert.id : ''),
@@ -40,6 +51,9 @@ const windowLine = computed(() => {
   const a = props.alert
   if (!a) return ''
   if (a.sealed) return '已封板，无法挂单'
+  if (isIntraday.value) {
+    return '未封板，盘中仍可挂单；封板、炸板不回封或冲高回落按失效处理'
+  }
   if (a.windowKey === 'final') return '竞价已定稿，9:30 后看开盘承接；挂单不保证成交'
   return '未封板，竞价窗口可挂单；成交以 9:25 撮合为准'
 })
@@ -77,14 +91,14 @@ function onCatalyst() {
         }"
         role="status"
         aria-live="polite"
-        :aria-label="isSummary ? '本轮竞价预警汇总' : `竞价预警 ${alert.name || ''}`"
+        :aria-label="isSummary ? kickerText : `${isIntraday ? '盘中' : '竞价'}预警 ${alert.name || ''}`"
       >
         <div class="alert-glow" aria-hidden="true"></div>
 
         <header class="alert-head">
           <span class="alert-kicker">
             <i class="alert-dot"></i>
-            {{ isSummary ? '竞价预警 · 本轮汇总' : actionable ? '竞价预警 · 可挂单' : '竞价预警 · 观察' }}
+            {{ kickerText }}
           </span>
           <span class="alert-head-right">
             <span v-if="queued" class="alert-queued">还有 {{ queued }} 条</span>
@@ -100,9 +114,9 @@ function onCatalyst() {
         <template v-if="isSummary">
           <div class="alert-summary">
             <div class="alert-summary-main">
-              <b>本轮竞价预警 {{ alert.names.length }} 只</b>
+              <b>本轮{{ isIntraday ? '盘中' : '竞价' }}预警 {{ alert.names.length }} 只</b>
               <p>
-                均未涨停；首次连接只汇总一次，避免一开页就被逐只弹窗淹没，之后新达标的票逐只提醒。
+                均未{{ isIntraday ? '封板' : '涨停' }}；首次连接只汇总一次，避免一开页就被逐只弹窗淹没，之后新达标的票逐只提醒。
               </p>
             </div>
             <div class="alert-summary-count">
@@ -114,7 +128,7 @@ function onCatalyst() {
             <span v-for="name in alert.names" :key="name" class="alert-name">{{ name }}</span>
           </div>
           <p class="alert-foot-note">
-            预警只是条件触发，不是买入指令。均未涨停；催化未核验或板块三关未过继续按观察处理。
+            预警只是条件触发，不是买入指令。均未{{ isIntraday ? '封板' : '涨停' }}；催化未核验或板块三关未过继续按观察处理。
           </p>
           <div class="alert-actions">
             <button class="btn btn--sm btn--gold" @click="emit('center')">打开预警中心</button>
@@ -167,7 +181,7 @@ function onCatalyst() {
               <b class="mono">{{ gapText }}</b>
             </div>
             <div class="aq">
-              <small>竞价额</small>
+              <small>{{ isIntraday ? '成交额' : '竞价额' }}</small>
               <b class="mono">{{ fmtMoney(alert.amount, { sign: false }) }}</b>
             </div>
           </div>
@@ -181,6 +195,9 @@ function onCatalyst() {
           <p class="alert-gap">
             {{ windowLine }}
             <template v-if="alert.limitUp != null"> · 涨停价 {{ fmtPrice(alert.limitUp) }}</template>
+          </p>
+          <p class="alert-rec-time mono">
+            推荐 {{ alert.recommendTime || alert.time }} · 本次触发 {{ alert.time }}
           </p>
 
           <p class="alert-foot-note">{{ footNote }}</p>
@@ -542,6 +559,15 @@ function onCatalyst() {
   margin: 6px 0 0;
   font-size: 11px;
   color: var(--dim);
+  letter-spacing: 0.03em;
+}
+
+.alert-rec-time {
+  position: relative;
+  z-index: 1;
+  margin: 3px 0 0;
+  font-size: 10px;
+  color: var(--muted);
   letter-spacing: 0.03em;
 }
 

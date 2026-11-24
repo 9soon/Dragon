@@ -4,8 +4,10 @@ import { catalystType, getCatalyst, isCatalystValid } from './catalysts'
 const SETTINGS_KEY = 'longmai.alerts.settings.v1'
 const HISTORY_KEY = 'longmai.alerts.history.v1'
 const SEEN_KEY = 'longmai.alerts.seen.v1'
+const RECS_KEY = 'longmai.alerts.recs.v1'
 const MAX_HISTORY = 80
 const MAX_SEEN = 400
+const MAX_RECS = 60
 
 const DEFAULTS = {
   enabled: true,
@@ -47,15 +49,50 @@ function readSeen() {
   }
 }
 
+/* 推荐记录独立于弹窗历史：刷新页面、重新打开都能看到当天的推荐与首次时间 */
+function readRecommendationStore() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECS_KEY) || '{}')
+    const items = Array.isArray(raw) ? raw : raw && Array.isArray(raw.items) ? raw.items : []
+    const clean = items
+      .filter((x) => x && x.key && x.code)
+      .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))
+      .slice(0, MAX_RECS)
+    return {
+      items: clean,
+      date:
+        raw && !Array.isArray(raw) && raw.date
+          ? raw.date
+          : clean[0]
+            ? clean[0].tradeDate || ''
+            : '',
+      dateLabel:
+        raw && !Array.isArray(raw) && raw.dateLabel
+          ? raw.dateLabel
+          : clean[0]
+            ? clean[0].tradeDateLabel || shortDate(clean[0].tradeDate)
+            : ''
+    }
+  } catch (e) {
+    return { items: [], date: '', dateLabel: '' }
+  }
+}
+
 /* 去重键与展示记录分开保存：用户清空记录后，同一只票当天仍不会再次弹窗 */
 const seenKeys = readSeen()
+const recStore = readRecommendationStore()
 
 export const alertState = reactive({
   ...readSettings(),
   history: readHistory(),
+  recommendations: recStore.items,
+  recommendationDate: recStore.date,
+  recommendationDateLabel: recStore.dateLabel,
   current: null,
   queue: [],
   centerOpen: false,
+  windowOpen: false,
+  windowKey: '',
   lastCheckAt: 0,
   lastError: '',
   seeded: false
@@ -73,6 +110,43 @@ try {
 export const unreadAlerts = computed(
   () => alertState.history.filter((x) => !x.read && !x.test).length
 )
+
+/* 当前仍在预警榜里的推荐：严格按预警分从强到弱，显示名次即排序 */
+export const currentRecommendations = computed(() =>
+  (alertState.recommendations || [])
+    .filter(
+      (x) =>
+        x &&
+        x.active &&
+        (!alertState.recommendationDate || x.tradeDate === alertState.recommendationDate)
+    )
+    .slice()
+    .sort(
+      (a, b) =>
+        (Number(b.alertScore) || 0) - (Number(a.alertScore) || 0) ||
+        String(a.recommendAt || '').localeCompare(String(b.recommendAt || ''))
+    )
+)
+
+/* 已移出榜单的当日记录：只做时间留档，不再冒充当前推荐 */
+export const pastRecommendations = computed(() =>
+  (alertState.recommendations || [])
+    .filter(
+      (x) =>
+        x &&
+        !x.active &&
+        (!alertState.recommendationDate || x.tradeDate === alertState.recommendationDate)
+    )
+    .slice()
+    .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))
+)
+
+export const recommendationUpdatedAt = computed(() => {
+  const list = alertState.recommendations || []
+  if (!list.length) return ''
+  const latest = list.reduce((max, x) => Math.max(max, Number(x.updatedAt) || 0), 0)
+  return latest ? stampOf(latest) : ''
+})
 
 const timeFmt = new Intl.DateTimeFormat('zh-CN', {
   timeZone: 'Asia/Shanghai',
@@ -120,6 +194,27 @@ function persistHistory() {
   }
 }
 
+let recPersistAt = 0
+
+/* 推荐记录写入做 5 秒节流；新增 / 移出榜单时强制落盘，刷新不丢 */
+function persistRecommendations(force = false) {
+  const now = Date.now()
+  if (!force && now - recPersistAt < 5000) return
+  recPersistAt = now
+  try {
+    localStorage.setItem(
+      RECS_KEY,
+      JSON.stringify({
+        date: alertState.recommendationDate || '',
+        dateLabel: alertState.recommendationDateLabel || '',
+        items: (alertState.recommendations || []).slice(0, MAX_RECS)
+      })
+    )
+  } catch (e) {
+    /* 仅保留本次会话 */
+  }
+}
+
 function markSeen(key) {
   if (!key || seenKeys.includes(key)) return
   seenKeys.push(key)
@@ -129,6 +224,135 @@ function markSeen(key) {
   } catch (e) {
     /* 仅保留本次会话 */
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * 预警推荐：当前榜单 + 当日历史，刷新不清空
+ * ------------------------------------------------------------------ */
+
+export function ingestRecommendations(board, meta = {}) {
+  const list = Array.isArray(board) ? board.filter((x) => x && x.code) : []
+  const tradeDate = meta.tradeDate || (list[0] && list[0].tradeDate) || ''
+  if (!tradeDate) return
+
+  const now = Date.now()
+  const nowIso = new Date(now).toISOString()
+  const nowTime = stampOf(now)
+  const seen = new Set()
+  let dirty = false
+
+  if (alertState.recommendationDate !== tradeDate) {
+    alertState.recommendationDate = tradeDate
+    dirty = true
+  }
+  if (meta.tradeDateLabel && alertState.recommendationDateLabel !== meta.tradeDateLabel) {
+    alertState.recommendationDateLabel = meta.tradeDateLabel
+    dirty = true
+  }
+
+  for (const x of list) {
+    const key = `${tradeDate}:${x.code}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    let rec = alertState.recommendations.find((r) => r.key === key)
+    if (!rec) {
+      rec = {
+        id: key,
+        key,
+        code: x.code,
+        name: x.name || x.code,
+        tradeDate,
+        tradeDateLabel: meta.tradeDateLabel || x.tradeDateLabel || shortDate(tradeDate),
+        recommendAt: x.recommendAt || nowIso,
+        recommendTime: x.recommendTime || nowTime,
+        active: true,
+        updatedAt: now,
+        read: true
+      }
+      alertState.recommendations.push(rec)
+      dirty = true
+    }
+    if (!rec.active) {
+      rec.active = true
+      rec.inactiveLabel = ''
+      dirty = true
+    }
+    Object.assign(rec, {
+      name: x.name || rec.name,
+      sector: x.sector || rec.sector || '未分类',
+      sectorKey: x.sectorKey || rec.sectorKey || '',
+      sectorHeat: x.sectorHeat != null ? x.sectorHeat : rec.sectorHeat,
+      sectorTodayCount: x.sectorTodayCount != null ? x.sectorTodayCount : rec.sectorTodayCount,
+      sectorReady: !!x.sectorReady,
+      lbc: x.lbc != null ? x.lbc : rec.lbc,
+      fromPool: !!x.fromPool,
+      price: x.price != null ? x.price : rec.price,
+      pct: x.pct != null ? x.pct : rec.pct,
+      limitUp: x.limitUp != null ? x.limitUp : rec.limitUp,
+      gapToLimit: x.gapToLimit != null ? x.gapToLimit : rec.gapToLimit,
+      sealed: false,
+      buyable: true,
+      sealRatio: x.sealRatio != null ? x.sealRatio : rec.sealRatio,
+      sealFund: x.sealFund == null ? rec.sealFund : x.sealFund,
+      firstSealLabel: x.firstSealLabel || rec.firstSealLabel,
+      blowCount: x.blowCount != null ? x.blowCount : rec.blowCount,
+      turnover: x.turnover != null ? x.turnover : rec.turnover,
+      amount: x.amount != null ? x.amount : rec.amount,
+      amountRatio: x.amountRatio != null ? x.amountRatio : rec.amountRatio,
+      volRatio: x.volRatio != null ? x.volRatio : rec.volRatio,
+      score: x.score != null ? x.score : rec.score,
+      alertScore: x.alertScore != null ? x.alertScore : rec.alertScore,
+      geneScore: x.geneScore != null ? x.geneScore : rec.geneScore,
+      nodeLabel: x.nodeLabel || rec.nodeLabel,
+      statusLabel: x.statusLabel || rec.statusLabel || '盘中推荐 · 未封板',
+      stageKey: x.stageKey || (meta.stage && meta.stage.key) || rec.stageKey || '',
+      alertMode: x.alertMode || (meta.intraday ? 'intraday' : rec.alertMode || 'auction'),
+      tags: Array.isArray(x.tags) ? x.tags.slice(0, 4) : rec.tags || [],
+      reasons: Array.isArray(x.reasons) ? x.reasons.slice(0, 4) : rec.reasons || [],
+      risks: Array.isArray(x.risks) ? x.risks.slice(0, 3) : rec.risks || [],
+      active: true,
+      lastSeenAt: nowIso,
+      lastSeenTime: nowTime,
+      updatedAt: now,
+      read: true
+    })
+  }
+
+  /* 跨交易日：旧记录保留为历史，不再显示在“当前在榜” */
+  for (const rec of alertState.recommendations) {
+    if (rec.tradeDate !== tradeDate && rec.active) {
+      rec.active = false
+      rec.updatedAt = now
+      rec.inactiveLabel = '上一交易日记录'
+      dirty = true
+    }
+  }
+
+  /* 只有榜单可信时才把未出现的旧推荐移出，避免午间冻结 / 数据抖动误伤 */
+  if (meta.pruneActive !== false) {
+    for (const rec of alertState.recommendations) {
+      if (rec.tradeDate === tradeDate && rec.active && !seen.has(rec.key)) {
+        rec.active = false
+        rec.updatedAt = now
+        rec.inactiveLabel = '已移出当前推荐榜（封板 / 走弱 / 不再达标）'
+        dirty = true
+      }
+    }
+  }
+
+  const keepDates = Array.from(
+    new Set(alertState.recommendations.map((r) => r.tradeDate).filter(Boolean))
+  )
+    .sort()
+    .slice(-2)
+  const next = alertState.recommendations
+    .filter((r) => keepDates.includes(r.tradeDate))
+    .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))
+    .slice(0, MAX_RECS)
+  if (next.length !== alertState.recommendations.length) dirty = true
+  alertState.recommendations = next
+
+  persistRecommendations(dirty)
 }
 
 export function catalystStateFor(sectorKey) {
@@ -207,7 +431,7 @@ function notifyDesktop(alert) {
   }
   try {
     const n = new Notification(
-      `竞价预警 · ${alert.actionable ? '可执行' : '观察'} · ${alert.name}`,
+      `${alert.intraday ? '盘中预警' : '竞价预警'} · ${alert.actionable ? '可执行' : '观察'} · ${alert.name}`,
       {
         body: `${alert.sector} · ${alert.statusLabel} · 预警分 ${alert.score}\n${
           alert.reasons[0] || ''
@@ -238,11 +462,15 @@ function makeAlert(x, payload, key, cat) {
   const at = Date.now()
   const win = payload.window || null
   const alertScore = x.alertScore != null ? Number(x.alertScore) : Number(x.score)
+  const intraday = !!payload.intraday || x.alertMode === 'intraday'
   return {
     id: `${key}:${at}`,
     key,
     at,
     time: stampOf(at),
+    recommendAt: x.recommendAt || new Date(at).toISOString(),
+    recommendTime: x.recommendTime || stampOf(at),
+    lastSeenTime: x.lastSeenTime || stampOf(at),
     date: payload.tradeDate || '',
     dateLabel: shortDate(payload.tradeDate),
     code: x.code,
@@ -267,18 +495,21 @@ function makeAlert(x, payload, key, cat) {
     turnover: x.turnover,
     amount: x.amount,
     amountRatio: x.amountRatio,
+    volRatio: x.volRatio,
     score: Number.isFinite(alertScore) ? alertScore : x.score,
     alertScore: x.alertScore != null ? alertScore : null,
     auctionScore: x.score,
     scoreLabel: '预警分',
     geneScore: x.geneScore,
     nodeLabel: x.nodeLabel,
-    statusLabel: x.statusLabel || '竞价预警 · 未涨停',
+    statusLabel:
+      x.statusLabel || (intraday ? '盘中推荐 · 未封板' : '竞价预警 · 未涨停'),
     stageKey: payload.stage ? payload.stage.key : '',
     stageLabel: win && win.open ? win.label : payload.stage ? payload.stage.label : '',
     windowKey: win ? win.key : '',
     windowLabel: win ? win.label : '',
-    intraday: !!payload.intraday,
+    alertMode: x.alertMode || (intraday ? 'intraday' : 'auction'),
+    intraday,
     tradeDateLabel: payload.tradeDateLabel || '',
     tags: Array.isArray(x.tags) ? x.tags.slice(0, 4) : [],
     reasons: Array.isArray(x.reasons) ? x.reasons.slice(0, 4) : [],
@@ -301,7 +532,8 @@ function buildSummary(alerts, payload) {
     dateLabel: shortDate(payload.tradeDate),
     stageKey: payload.stage ? payload.stage.key : '',
     stageLabel: payload.stage ? payload.stage.label : '',
-    statusLabel: '当前快照',
+    intraday: !!payload.intraday,
+    statusLabel: payload.intraday ? '盘中快照' : '竞价快照',
     names: alerts.map((x) => `${x.name} ${x.score}`),
     actionableCount: alerts.filter((x) => x.actionable).length,
     pendingCount: alerts.filter((x) => !x.actionable).length,
@@ -353,9 +585,24 @@ export function evaluateAlerts(payload) {
   alertState.lastCheckAt = Date.now()
   alertState.lastError = ''
   refreshCatalystStates()
-  if (!alertState.enabled || !payload.active) return
+  alertState.windowOpen = !!(payload.active && payload.window && payload.window.open)
+  alertState.windowKey = payload.window ? payload.window.key || '' : ''
+  if (!payload.active) return
 
-  /* 阈值与未涨停过滤由后端统一执行，前端不再二次改口径 */
+  /* 推荐榜与弹窗分开：即使弹窗关闭，当天推荐记录也能继续保留 */
+  if (Array.isArray(payload.board)) {
+    ingestRecommendations(payload.board, {
+      tradeDate: payload.tradeDate,
+      tradeDateLabel: payload.tradeDateLabel,
+      stage: payload.stage,
+      intraday: payload.intraday,
+      pruneActive: payload.boardReady !== false
+    })
+  }
+
+  if (!alertState.enabled) return
+
+  /* 阈值与未封板过滤由后端统一执行，前端不再二次改口径 */
   const items = (payload.items || []).filter((x) => x && x.code)
   const fresh = []
   for (const x of items) {
@@ -426,9 +673,13 @@ export function setAlertError(message) {
 
 export function clearAlertHistory() {
   alertState.history = []
+  alertState.recommendations = []
+  alertState.recommendationDate = ''
+  alertState.recommendationDateLabel = ''
   alertState.current = null
   alertState.queue = []
   persistHistory()
+  persistRecommendations(true)
 }
 
 export function testAlert() {

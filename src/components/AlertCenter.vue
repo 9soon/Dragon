@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
 import BottomSheet from './BottomSheet.vue'
+import AlertRecommendations from './AlertRecommendations.vue'
 import { fmtNum, fmtPct, pctTone } from '../lib/format'
 import { openCatalyst, toast } from '../lib/ui'
 import {
@@ -67,7 +68,7 @@ function armClear() {
   clearTimeout(clearTimer)
   clearArmed.value = false
   clearAlertHistory()
-  toast('预警记录已清空')
+  toast('预警与推荐记录已清空')
 }
 
 onBeforeUnmount(() => clearTimeout(clearTimer))
@@ -99,7 +100,7 @@ function verify(item) {
         {{ alertState.enabled ? '预警开启' : '预警关闭' }}
       </span>
       <span class="ac-status-text">
-        只在竞价 9:20–9:30 检查，3 秒一轮；盘中 / 休市不弹。
+        竞价 9:20–9:30 与盘中 9:30–15:00 检查；盘中只提醒未封板、还买得进的票。
       </span>
     </div>
 
@@ -116,7 +117,7 @@ function verify(item) {
       >
         <span class="switch-copy">
           <b>实时预警</b>
-          <small>竞价 9:20–9:30 出现未涨停强势票时弹窗（预警分 ≥70，每轮最多 1 只）</small>
+          <small>竞价 9:20–9:30 与盘中 9:30–15:00 出现未封板强势票时弹窗（预警分 ≥70，每轮最多 1 只）</small>
         </span>
         <span class="switch" :class="{ 'is-on': alertState.enabled }"><i></i></span>
       </button>
@@ -168,16 +169,18 @@ function verify(item) {
       </button>
     </div>
 
+    <AlertRecommendations compact :live="alertState.windowOpen" />
+
     <header class="ac-list-head">
       <span class="section-title">触发记录</span>
       <span class="ac-count">{{ history.length }} 条 · 最新在前</span>
     </header>
 
     <div v-if="!history.length" class="ac-empty">
-      <b>还没有竞价预警</b>
+      <b>还没有预警记录</b>
       <p>
-        当候选在竞价 9:20–9:30 满足「未涨停」「涨幅 +2% ~ +8%」「基因 ≥65」
-        「板块三关通过或板块昨日涨停 ≥5 家」「预警分 ≥70」时才会记录并弹窗。
+        当候选在竞价 9:20–9:30 或盘中 9:30–15:00 满足「未封板」「涨幅 +2% ~ +8%」
+        「基因 ≥65」「板块三关通过或板块涨停 ≥5 家」「预警分 ≥70」时才会记录并弹窗。
         没有合格票就不弹，空仓也是有效决策。
       </p>
     </div>
@@ -193,6 +196,10 @@ function verify(item) {
     >
       <div class="ae-top">
         <span class="ae-time mono">{{ item.dateLabel }} {{ item.time }}</span>
+        <span
+          v-if="item.recommendTime && item.recommendTime !== item.time"
+          class="ae-time mono"
+        >推荐 {{ item.recommendTime }}</span>
         <span class="chip" :class="item.test ? 'chip--blue' : item.actionable ? 'chip--red' : 'chip--warn'">
           {{ item.test ? '弹窗自检' : item.actionable ? '可执行预警' : '观察预警' }}
         </span>
@@ -251,14 +258,15 @@ function verify(item) {
     <section class="ac-rules">
       <h4>触发与去重规则</h4>
       <ul>
-        <li>只在竞价 9:20–9:25（不可撤单）和 9:25–9:30（定稿）检查；盘中封板、已经涨停的票不弹。</li>
-        <li>只提醒未涨停、涨幅 +2% ~ +8% 的候选；贴涨停或封死买不进的直接排除。</li>
-        <li>同时要求基因 ≥65、板块三关通过或板块昨日涨停 ≥5 家、竞价预警分 ≥70；有成交额数据时还要求 ≥2000 万且 ≥昨日成交 2%。</li>
-        <li>预警分 = 基因 50% + 竞价强度 30% + 板块 12% + 昨日涨停池 8%，与竞价榜综合分不是同一口径。</li>
-        <li>每轮只提醒预警分最高的 1 只，不批量轰炸；剔除科创板 688/689、创业板 300/301 的 20cm。</li>
-        <li>同一代码每天最多提醒一次；首次连接只汇总一次，之后新达标逐只弹窗。9:15–9:20 试撮不触发。</li>
-        <li>纯传闻不提醒；催化未核验或板块三关未过只算观察预警，不解除观察。</li>
-        <li>预警不是买入指令；9:25 后看开盘承接，不保证成交。页面需保持打开，桌面通知只是尽力送达。</li>
+        <li>竞价 9:20–9:25（不可撤单）、9:25–9:30（定稿）与盘中 9:30–15:00 检查；已封板、贴涨停、20cm 都不弹。</li>
+        <li>只提醒未封板、距涨停 &gt;0.3 个点、涨幅 +2% ~ +8% 的候选；封死买不进或只剩最后一档的直接排除。</li>
+        <li>同时要求基因 ≥65、板块三关通过或板块涨停 ≥5 家、预警分 ≥70；竞价还要求竞价额 ≥2000 万且 ≥昨日成交 2%，盘中有量比数据时要求 ≥1.0。</li>
+        <li>推荐榜按预警分从强到弱最多 3 只；每轮最多弹预警分最高的 1 只，不批量轰炸。</li>
+        <li>竞价预警分 = 基因 50% + 竞价强度 30% + 板块 12% + 昨日涨停池 8%；盘中预警分 = 基因 45% + 近板强度 25% + 量比 15% + 板块 10% + 昨日涨停池 5%，都与榜单综合分不是同一口径。</li>
+        <li>推荐与预警时间保存在浏览器本地，刷新页面不会清空；清空记录会同时删除当日推荐历史，需要二次确认。</li>
+        <li>同一代码每天最多弹一次；首次连接只汇总一次，之后新达标逐只弹窗。9:15–9:20 试撮不触发。</li>
+        <li>纯传闻不提醒；催化未核验或板块三关未过只算观察预警，不解除观察。预警不是买入指令，封板后只排队观察。</li>
+        <li>页面需保持打开；浏览器后台节流、网络延迟和接口限流会导致漏报，桌面通知只是尽力送达，不是服务器推送。</li>
       </ul>
     </section>
   </BottomSheet>

@@ -28,8 +28,8 @@ import {
 const TAB_KEY = 'longmai.tab.v1'
 const TAB_LIST = ['mainline', 'picks', 'edge', 'review', 'strategy']
 const INDEX_SECID = '1.000001'
-/* 预警只在竞价窗口轮询：auction=9:15–9:25，waiting=9:25–9:30；盘中不弹 */
-const ALERT_MARKET_KEYS = ['auction', 'waiting']
+/* 预警与推荐轮询：竞价 9:15–9:30 + 盘中 9:30–15:00；只提醒未封板、还买得进的票 */
+const ALERT_MARKET_KEYS = ['auction', 'waiting', 'morning', 'afternoon']
 const savedTab = (() => {
   try {
     return localStorage.getItem(TAB_KEY)
@@ -188,7 +188,12 @@ async function pollAlerts() {
 
 function scheduleAlerts() {
   clearTimeout(alertTimer)
-  const delay = ALERT_MARKET_KEYS.includes(marketKey.value) ? 3000 : 10000
+  const key = marketKey.value
+  const delay = ['auction', 'waiting'].includes(key)
+    ? 3000
+    : ['morning', 'afternoon'].includes(key)
+      ? 5000
+      : 10000
   alertTimer = setTimeout(() => {
     if (document.hidden && !alertState.desktop) {
       scheduleAlerts()
