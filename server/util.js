@@ -202,6 +202,11 @@ function stripLevel(name) {
     .trim()
 }
 
+/* 双创 20cm：科创板 688/689、创业板 300/301；推荐与预警默认剔除 */
+function is20cmCode(code) {
+  return /^(300|301|688|689)/.test(String(code || ''))
+}
+
 module.exports = {
   UA,
   requestRaw,
@@ -223,5 +228,6 @@ module.exports = {
   round,
   num,
   safeDivide,
-  stripLevel
+  stripLevel,
+  is20cmCode
 }

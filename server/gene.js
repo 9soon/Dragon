@@ -10,13 +10,13 @@
  * 所有分数都是可解释的加权，不承诺胜率，也不替代人工催化核验。
  */
 
-const { clamp, round, num } = require('./util')
+const { clamp, round, num, is20cmCode } = require('./util')
 const { sealMinutesFromOpen, sealTimeLabel, flowText } = require('./scoring')
 
 const PHASE_GENE = { ice: 34, ebb: 48, mixed: 66, repair: 84, feast: 94 }
 
 function limitRatioFor(code) {
-  if (/^(300|301|688)/.test(String(code))) return 0.2
+  if (is20cmCode(code)) return 0.2
   if (/^[48]/.test(String(code))) return 0.3
   return 0.1
 }

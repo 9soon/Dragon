@@ -893,6 +893,7 @@ onBeforeUnmount(() => {
             <div class="rule-line"><span>03</span><p>只做主线核心，不追没有板块支撑的孤立脉冲；非涨停池成员缺少昨日封板质量，分数自动降级。</p></div>
             <div class="rule-line"><span>04</span><p>炸板不回封、封单快速变薄、跌破分时均线，按失效处理；不补仓、不摊低成本。</p></div>
             <div class="rule-line"><span>05</span><p>板块三关未过或催化未核验，盘中再强也只是观察，不进入执行清单。</p></div>
+            <div class="rule-line"><span>06</span><p>只做非双创标的；科创板 688/689、创业板 300/301 的 20cm 不进入榜单和预警。</p></div>
           </template>
           <template v-else>
             <div class="rule-line"><span>01</span><p>9:15–9:20 可撤单，只看不追；虚假挂单不计入判断。</p></div>
@@ -901,6 +902,7 @@ onBeforeUnmount(() => {
             <div class="rule-line"><span>04</span><p>已封板只标「买不进 / 排队观察」，不进入可执行候选；竞价预警只提醒未涨停票。</p></div>
             <div class="rule-line"><span>05</span><p>高开 > 8% 不追，低开翻绿剔除；9:30 承接失败按失效处理。</p></div>
             <div class="rule-line"><span>06</span><p>板块三关未过或催化未核验，竞价再强也只是观察，不执行。</p></div>
+            <div class="rule-line"><span>07</span><p>只做非双创标的；科创板 688/689、创业板 300/301 的 20cm 不进入榜单和预警，每轮预警最多 1 只。</p></div>
           </template>
         </section>
 

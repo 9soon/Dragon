@@ -27,7 +27,8 @@ const {
   round,
   num,
   sleep,
-  stripLevel
+  stripLevel,
+  is20cmCode
 } = require('./util')
 
 const PROFILE_FILE = path.join(__dirname, '..', '.cache', 'dragon-profile.json')
@@ -1137,6 +1138,7 @@ function buildHotshotSection(items) {
   for (const x of list
     .filter((item) => {
       if (item.lbc < 1 || item.lbc > 3) return false
+      if (is20cmCode(item.stock.code)) return false
       if (!item.sector || !sectorOk(item)) return false
       if (num(item.stock.blowCount, 0) >= 3 || num(item.stock.turnover, 0) > 40) return false
       if (item.seal.late || item.seal.sealRatio < 0.7) return false
@@ -1158,6 +1160,7 @@ function buildHotshotSection(items) {
       const stock = x.stock
       const lbc = x.lbc
       if (lbc < 1 || lbc > 2) return false
+      if (is20cmCode(stock.code)) return false
       /* 明日待选只从三关全过的板块里取；只过 1–2 关的降为观察，不降标准补位 */
       if (!x.sector || !x.sector.dataReady) return false
       /* 只做板块龙一：龙一是 3 板或不在 1–2 板范围时，宁可空仓，不拿跟随卡位 */
@@ -1236,6 +1239,7 @@ function buildHotshotSection(items) {
   for (const x of list
     .filter((item) => {
       if (item.lbc < 1 || item.lbc > 2) return false
+      if (is20cmCode(item.stock.code)) return false
       if (!item.sector || readySet.has(item.stock.code)) return false
       if (num(item.stock.blowCount, 0) >= 4 || num(item.stock.turnover, 0) > 40) return false
       if (item.seal.veryLate) return false
@@ -1366,6 +1370,7 @@ function buildHotshotSection(items) {
     notes: [
       '审美分 = 30% 封板 + 18% 板块 + 14% 节点 + 12% 身位 + 8% 市值 + 8% 换手 + 5% 弱转强 + 5% 板块地位；只用于排序，不是胜率。',
       '明日待选只从“三关全过 + 板块龙一”的 1–2 板里取；板块龙头是 3 板或只过 1–2 关时，宁可空仓，不降标准补位。',
+      '20cm 标的（科创板 688/689、创业板 300/301）不进入今日命中、明日待选与观察清单；涨停统计仍按全市场。',
       '北京炒家偏好首板套利、板块效应与缩量二板；92科比只做高位龙头或低位首板 / 一进二，避开中位；全能的野人强调龙空龙，不是龙一就空仓。以上来自公开访谈与复盘总结，未验证其宣称胜率。',
       '板块采用行业板块口径，和概念题材不完全等价；打板前必须人工核对催化与同板块是否真的一条主线。',
       '缩量二板是加分项，但开板承接未知；首板换手过低多是关注度不足。'
@@ -1594,7 +1599,10 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     })
   }
 
-  const qualifiedAll = items
+  /* 推荐口径：20cm 不进入晋级榜 / 龙头 / 高位观察 / 剔除池 / 打板客，只留在涨停统计 */
+  const recommendable = items.filter((x) => !is20cmCode(x.stock.code))
+
+  const qualifiedAll = recommendable
     .filter(
       (x) =>
         x.lbc >= 2 &&
@@ -1642,7 +1650,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
   const qualified = qualifiedAll.slice(0, 5)
 
   const qualifiedSet = new Set(qualifiedAll.map((x) => x.stock.code))
-  const heightWatch = items
+  const heightWatch = recommendable
     .filter((x) => x.lbc === maxBoard && !qualifiedSet.has(x.stock.code))
     .sort(
       (a, b) =>
@@ -1678,7 +1686,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     return Array.from(new Set(reasons)).slice(0, 3)
   }
 
-  const rejectedPool = items
+  const rejectedPool = recommendable
     .filter(
       (x) => x.lbc >= 2 && !qualifiedSet.has(x.stock.code) && !watchSet.has(x.stock.code)
     )
@@ -1846,7 +1854,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
         .map((x) => `${x.stock.name} ${x.lbc} 板：${x.riskShort}`)
         .join('；')
     : '结构待确认'
-  const threeBoardItems = items.filter((x) => x.lbc === 3)
+  const threeBoardItems = recommendable.filter((x) => x.lbc === 3)
   const threeBoardText = threeBoardItems.length
     ? threeBoardItems
         .map((x) => `${x.stock.name}（${x.riskShort}${x.midTrap ? ' / 中位三板' : ''}）`)
@@ -1860,7 +1868,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       topGap ? `${topGap} 板断层，` : ''
     }3 板 ${threeBoardCount} 家，2 板 ${twoBoardCount} 家。`,
     `中位：${threeBoardText}。2 板同高度竞争激烈，只留封板最干净、板块有共振的核心。`,
-    `前排：2 板+ ${items.filter((x) => x.lbc >= 2).length} 只，合格 ${
+    `前排：2 板+ ${recommendable.filter((x) => x.lbc >= 2).length} 只，合格 ${
       qualifiedAll.length
     } 只${
       qualified.length
@@ -1869,7 +1877,8 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
             .map((x) => x.stock.name)
             .join('、')}${qualifiedAll.length > 3 ? ' 等' : ''}）`
         : ''
-    }；剔除 ${rejectedPool.length + heightWatch.length} 只（高位观察 ${heightWatch.length} · 后排剔除 ${rejectedPool.length}）。`
+    }；剔除 ${rejectedPool.length + heightWatch.length} 只（高位观察 ${heightWatch.length} · 后排剔除 ${rejectedPool.length}）。`,
+    '口径：涨停家数与高度统计为全市场；推荐、晋级榜、龙头与明日待选剔除科创板 688/689、创业板 300/301 的 20cm。'
   ]
 
   return {
@@ -1880,7 +1889,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
     action,
     leader,
     promotionRank: qualified.map((x) => planItemOf(x, x.rank)),
-    hotshot: buildHotshotSection(items),
+    hotshot: buildHotshotSection(recommendable),
     heightWatch: heightWatch.map((x) => planItemOf(x, null)),
     rejected: {
       total: rejectedPool.length,
@@ -2053,6 +2062,8 @@ function candidateUniverse(dashboard) {
 function prepRank(entries, sentiment, profile) {
   return entries
     .filter((e) => e.stock && num(e.stock.price, null) != null)
+    /* 准备池 / 隔夜推荐只做非 20cm；双创留给用户自己复盘，不进入推荐 */
+    .filter((e) => !is20cmCode(e.stock.code))
     .filter((e) => num(e.stock.lbc, 0) >= 2)
     .filter((e) => {
       const s = e.sector
@@ -2269,6 +2280,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
         stage.note,
         '非交易时段不计算竞价 / 盘中分，避免把历史涨幅伪装成实时强度。',
         '下方准备池按节点、情绪、连板高度、流通市值、弱转强与封板质量选最强 5 只，用于下一场竞价前准备。',
+        '准备池与竞价榜剔除科创板 688/689、创业板 300/301 的 20cm 标的；不是没有行情，而是不进入本工具的推荐口径。',
         profile ? '准备池已叠加老龙头画像匹配；画像只是样本统计，不是准确率。' : '老龙头画像尚未就绪，当前只展示基础条件。'
       ],
       source: '东方财富涨停池 + 腾讯行情；竞价 9:15–9:30 / 盘中 9:30–15:00 计算'
@@ -2315,6 +2327,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   for (const stock of pool) {
     if (!stock.code || /ST/i.test(stock.name || '')) continue
     if (!/^\d{6}$/.test(stock.code)) continue
+    if (is20cmCode(stock.code)) continue
     const sector = sectorByName.get(stock.sector) || null
     const sealRatio = sealRatioOf(stock)
     map.set(stock.code, {
@@ -2348,6 +2361,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   for (const sector of (dashboard.sectors && dashboard.sectors.mainCandidates) || []) {
     const lead = sector.board && sector.board.leadCode
     if (!lead || map.has(lead) || !/^\d{6}$/.test(lead)) continue
+    if (is20cmCode(lead)) continue
     map.set(lead, {
       code: lead,
       secid: `${/^6/.test(lead) ? 1 : 0}.${lead}`,
@@ -2382,6 +2396,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       for (const q of scan.items || []) {
         if (!q.code || map.has(q.code)) continue
         if (!/^\d{6}$/.test(q.code)) continue
+        if (is20cmCode(q.code)) continue
         const industry = q.industry || ''
         const sector = matchSectorLoose(industry)
         map.set(q.code, {
@@ -2736,6 +2751,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   if (!profile) notes.push('老龙头画像尚未构建完成，本次评分只使用基础规则。')
   if (stage.key === 'trial') notes.push('试撮阶段的数据会撤单、重挂，任何结论都必须等到 9:20 之后复核。')
   if (stage.key === 'final') notes.push('竞价定稿后仍需看 9:30 后是否放量承接；高开低走按失败处理。')
+  notes.push('本榜与预警剔除科创板 688/689、创业板 300/301 的 20cm 标的；20cm 不进入推荐，也不弹窗。')
   if (stage.frozen) notes.push('午间冻结：价格不再变化，13:00 后再看资金是否继续。')
   if (quoteResult.stale) notes.push('行情返回了缓存快照，请留意时间戳。')
   notes.push('节点标签只说明连板梯队地位（空间 / 卡位 / 转势 / 跟随），不改变竞价硬条件和仓位纪律。')
@@ -2781,7 +2797,7 @@ const ALERT_SCORE_THRESHOLD = 70
 const ALERT_MIN_GENE = 65
 const ALERT_MIN_PCT = 2
 const ALERT_MAX_PCT = 8
-const ALERT_MAX_ITEMS = 3
+const ALERT_MAX_ITEMS = 1
 const ALERT_STAGE_KEYS = ['locked', 'final']
 
 function auctionAlertPctPart(pct) {
@@ -2809,6 +2825,8 @@ function auctionAlertScore(x) {
 
 function auctionAlertEligible(x) {
   if (!x || !x.code) return false
+  /* 20cm 直接不提醒：科创板 688/689、创业板 300/301 */
+  if (is20cmCode(x.code)) return false
   if (x.status !== 'watch' && x.status !== 'confirm') return false
   /* 已封板 / 贴涨停的票直接排除：提醒时已经买不进 */
   if (x.sealed) return false
@@ -2948,6 +2966,7 @@ function buildAuctionAlerts(payload) {
     notes: [
       win.note,
       `竞价预警条件：未涨停、涨幅 +${ALERT_MIN_PCT}% ~ +${ALERT_MAX_PCT}%、基因 ≥${ALERT_MIN_GENE}、板块三关通过或板块昨日涨停 ≥5 家、竞价预警分 ≥${ALERT_SCORE_THRESHOLD}；有成交额数据时还要求 ≥2000 万且 ≥昨日成交 2%。`,
+      '剔除科创板 688/689、创业板 300/301 的 20cm；每轮最多只提醒预警分最高的 1 只，避免刷屏。',
       '预警分 = 基因 50% + 竞价强度 30% + 板块 12% + 昨日涨停池 8%，与竞价榜综合分不是同一口径。',
       '同一代码每天最多提醒一次；盘中封板、已涨停、9:15–9:20 试撮都不弹。',
       '预警是条件触发，不是买入指令；催化未核验或板块三关未过只按观察展示。'
@@ -3242,6 +3261,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     '流通市值看 50–120 亿的短线弹性区；200 亿以上按中军处理，500 亿以上降权。',
     '弱转强优先：跌停反包 / 炸板回封 / 烂板转强 > 连板晋级 > 新晋首板。',
     '只做板块核心，不做杂毛补涨；没有催化核验的标的不进入计划。',
+    '剔除科创板 688/689、创业板 300/301 的 20cm；它们不进入隔夜推荐与准备池，避免和 10cm 打板纪律混用。',
     '竞价高开 1%–4% 才执行；高开超过 6% 放弃，低开超过 -2% 放弃。',
     '单票 ≤ 10%，隔夜总仓 ≤ 30%；次日竞价不及预期先撤单，不摊低成本。',
     '所有价格都是条件区间，不是预测；跳空、滑点、停牌都可能让计划失效。'
@@ -3274,6 +3294,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       mode.note,
       '“隔夜单”是高风险计划：本页只提供条件与纪律，不保证成交价，也不保证次日溢价。',
       '准备池按节点、情绪适配、连板高度、流通市值、弱转强、封板质量与历史画像综合排序；未满足三关 + 情绪 + 画像 + 节点的，只进观察池。',
+      '20cm（科创板 688/689、创业板 300/301）已从推荐、准备池与观察池剔除；涨停统计和复盘事实仍保留。',
       '节点票模型参考公开的情绪周期、空间板、弱转强、中小流通盘与连板晋级思路；没有可验证的高胜率开源短线项目，分数是过滤器不是胜率。',
       '历史画像来自样本统计，不是准确率；样本外失效、风格切换都可能导致亏损。'
     ],

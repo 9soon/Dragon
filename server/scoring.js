@@ -1,6 +1,6 @@
 'use strict'
 
-const { clamp, round, stripLevel, num } = require('./util')
+const { clamp, round, stripLevel, num, is20cmCode } = require('./util')
 
 const ROLE_LABELS = {
   dragon: '情绪连板龙',
@@ -941,6 +941,8 @@ function buildPicks({ sectors, quotesByCode }) {
     const leaderRole = sector.maxBoard >= 2 ? 'dragon' : 'vanguard'
     const add = (stock, role) => {
       if (!stock || seen.has(stock.code) || /ST/i.test(stock.name)) return
+      /* 20cm（科创板 688/689、创业板 300/301）不进入选股推荐 */
+      if (is20cmCode(stock.code)) return
       const quote = quotesByCode.get(stock.code)
       const pick = makePoolPick(stock, role, sector, quote)
       seen.add(stock.code)
@@ -960,6 +962,7 @@ function buildPicks({ sectors, quotesByCode }) {
     if (
       mid &&
       !seen.has(mid.code) &&
+      !is20cmCode(mid.code) &&
       !/ST/i.test(mid.name || '') &&
       (mid.floatCap || 0) >= 8e9 &&
       mid.pct != null &&
@@ -969,7 +972,7 @@ function buildPicks({ sectors, quotesByCode }) {
       candidates.push(makeMidPick(mid, sector))
     } else {
       const fallbackMid = stocks
-        .filter((s) => s.floatCap >= 8e9 && !seen.has(s.code))
+        .filter((s) => s.floatCap >= 8e9 && !seen.has(s.code) && !is20cmCode(s.code))
         .sort((a, b) => b.floatCap - a.floatCap)[0]
       if (fallbackMid) add(fallbackMid, 'mid')
     }
