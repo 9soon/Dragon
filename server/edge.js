@@ -2475,6 +2475,8 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       (c.limitUp != null && c.price != null && Math.abs(c.price - c.limitUp) < 0.005)
     const sector = c.sectorRef || sectorByKey.get(c.sectorKey) || null
     const liveStrong = sectorLiveStrong.get(c.sector || c.industry || '未分类') || 0
+    /* 竞价阶段部分行情源不返回成交额，此时“同板块强势数”不可测，不能当作负面证据 */
+    const liveStrongKnown = !!stage.intraday || c.amount != null
     const weak = weakForCode(
       c.code,
       weakCtx,
@@ -2520,6 +2522,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     }
 
     let status = 'drop'
+    let auctionHard = false
     if (stage.intraday) {
       if (sealedNow && (c.fromPool || c.sectorReady || gene.score >= 60)) {
         status = 'confirm'
@@ -2527,7 +2530,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
         status = 'watch'
       }
     } else {
-      const auctionHard =
+      auctionHard =
         pct >= 2 &&
         pct <= 8 &&
         c.amount != null &&
@@ -2564,7 +2567,11 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     }
     if (c.sector) {
       reasons.push(
-        `「${c.sector}」${c.sectorTodayCount != null ? `今 ${c.sectorTodayCount} 家涨停` : '板块候选'}` +
+        `「${c.sector}」${
+          c.sectorTodayCount != null
+            ? `${stage.intraday ? '今' : '昨'} ${c.sectorTodayCount} 家涨停`
+            : '板块候选'
+        }` +
           `${c.sectorReady ? ' · 三关通过' : ''}`
       )
     }
@@ -2597,7 +2604,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       if (c.amount != null && c.amount < 2e7) risks.push('竞价额不足 2000 万，流动性不够')
       if (stage.key === 'trial') risks.push('9:20 前可撤单，虚假挂单风险高')
     }
-    if (liveStrong < 2) risks.push('同板块共振不足 2 只，可能只是孤军')
+    if (liveStrongKnown && liveStrong < 2) risks.push('同板块共振不足 2 只，可能只是孤军')
     if (!c.sectorReady) risks.push('板块三关未过，只能观察，不构成隔夜依据')
     if (c.lbc >= 5) risks.push('高位股，分歧时波动放大')
     if (c.blowCount > 0) risks.push(`昨日炸板 ${c.blowCount} 次`)
@@ -2669,6 +2676,9 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       nodeGap: node.gap,
       status,
       statusLabel: auctionLabel(status, stage.key),
+      auctionHard,
+      liveStrong,
+      liveStrongKnown,
       weak: weak || null,
       weakLabel: weak ? weak.label : '',
       tags: Array.from(new Set(tags)).slice(0, 6),
@@ -2746,26 +2756,120 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
 }
 
 /* ------------------------------------------------------------------ *
- * 实时预警：只取竞价 / 盘中“确认”且评分达标的候选
+ * 实时预警：只在竞价 9:20–9:30 提醒“未涨停、还能挂单”的强势候选
+ *  - 盘中封板、已经涨停的票不再弹窗（弹了也买不进）
  *  - 预警是条件触发，不是买入指令
  *  - 只给前端做弹窗，不改变仪表盘与竞价候选口径
  * ------------------------------------------------------------------ */
 
-const ALERT_SCORE_THRESHOLD = 72
+const ALERT_SCORE_THRESHOLD = 70
+const ALERT_MIN_GENE = 65
+const ALERT_MIN_PCT = 2
+const ALERT_MAX_PCT = 8
+const ALERT_MAX_ITEMS = 3
+const ALERT_STAGE_KEYS = ['locked', 'final']
+
+function auctionAlertPctPart(pct) {
+  return clamp(((pct - ALERT_MIN_PCT) / 5) * 100, 0, 100)
+}
+
+function auctionAlertSectorPart(x) {
+  if (x.sectorReady) return 100
+  const n = num(x.sectorTodayCount, 0)
+  if (n >= 10) return 70
+  if (n >= 5) return 60
+  return 20
+}
+
+/* 竞价预警分与竞价榜综合分分开：更重基因与竞价强度，不奖励“已经涨停” */
+function auctionAlertScore(x) {
+  const gene = num(x.geneScore, 0)
+  const pctPart = auctionAlertPctPart(num(x.pct, 0))
+  const sectorPart = auctionAlertSectorPart(x)
+  const poolPart = x.fromPool ? 100 : 60
+  return Math.round(
+    clamp(gene * 0.5 + pctPart * 0.3 + sectorPart * 0.12 + poolPart * 0.08, 0, 100)
+  )
+}
+
+function auctionAlertEligible(x) {
+  if (!x || !x.code) return false
+  if (x.status !== 'watch' && x.status !== 'confirm') return false
+  /* 已封板 / 贴涨停的票直接排除：提醒时已经买不进 */
+  if (x.sealed) return false
+  if (x.gapToLimit == null || num(x.gapToLimit, 0) <= 0.3) return false
+  const pct = num(x.pct, null)
+  if (pct == null || pct < ALERT_MIN_PCT || pct > ALERT_MAX_PCT) return false
+  if (num(x.geneScore, 0) < ALERT_MIN_GENE) return false
+  /* 板块三关通过，或昨日涨停 ≥5 家，二者至少满足一项 */
+  if (!x.sectorReady && num(x.sectorTodayCount, 0) < 5) return false
+  /* 竞价额缺失时不臆造；一旦有数据，必须过流动性门槛 */
+  if (x.amount != null && num(x.amount, 0) < 2e7) return false
+  if (x.amountRatio != null && num(x.amountRatio, 0) < 2) return false
+  return true
+}
+
+function auctionAlertWindow(stage) {
+  const key = (stage && stage.key) || 'off'
+  if (key === 'locked') {
+    return {
+      open: true,
+      key,
+      label: '9:20–9:25 不可撤单',
+      short: '竞价锁定',
+      note: '9:20 后不可撤单，竞价数据参考价值最高；只提醒未涨停的强势候选，可挂单，成交看 9:25 撮合。'
+    }
+  }
+  if (key === 'final') {
+    return {
+      open: true,
+      key,
+      label: '9:25–9:30 竞价定稿',
+      short: '竞价定稿',
+      note: '竞价已定稿，开盘前最后窗口；只提醒未涨停候选，9:30 后还要看承接，不保证成交。'
+    }
+  }
+  if (key === 'trial') {
+    return {
+      open: false,
+      key,
+      label: '9:15–9:20 试撮不提醒',
+      short: '试撮',
+      note: '9:15–9:20 允许撤单，价格和匹配量都可能变，不弹预警；9:20 后再按不可撤单数据判断。'
+    }
+  }
+  if (key === 'intraday') {
+    return {
+      open: false,
+      key,
+      label: '盘中不弹买入预警',
+      short: '盘中',
+      note: '盘中封板或涨停后才提醒，实际已经买不进；只在竞价 9:20–9:30 提醒未涨停候选。'
+    }
+  }
+  return {
+    open: false,
+    key,
+    label: '当前不在竞价预警窗口',
+    short: '休市',
+    note: '只在竞价 9:20–9:30 检查；休市不扫描，也不做事后预警。'
+  }
+}
 
 function buildAuctionAlerts(payload) {
   const p = payload || {}
   const active = !!p.active
   const stage = p.stage || { key: 'off', label: '非交易时段', active: false }
-  const items = active
+  const win = auctionAlertWindow(stage)
+  const windowOpen = !!(
+    active &&
+    !p.intraday &&
+    win.open &&
+    ALERT_STAGE_KEYS.includes(stage.key)
+  )
+  const items = windowOpen
     ? (p.candidates || [])
-        .filter(
-          (x) =>
-            x &&
-            x.status === 'confirm' &&
-            num(x.score, 0) >= ALERT_SCORE_THRESHOLD &&
-            x.code
-        )
+        .filter(auctionAlertEligible)
         .map((x) => ({
           code: x.code,
           secid: x.secid,
@@ -2776,11 +2880,13 @@ function buildAuctionAlerts(payload) {
           sectorTodayCount: x.sectorTodayCount,
           sectorReady: !!x.sectorReady,
           lbc: x.lbc,
+          fromPool: !!x.fromPool,
           price: x.price,
           pct: x.pct,
           limitUp: x.limitUp,
           gapToLimit: x.gapToLimit,
-          sealed: !!x.sealed,
+          sealed: false,
+          buyable: true,
           sealRatio: x.sealRatio,
           sealFund: x.sealFund == null ? null : x.sealFund,
           firstSealLabel: x.firstSealLabel,
@@ -2790,17 +2896,22 @@ function buildAuctionAlerts(payload) {
           amountRatio: x.amountRatio,
           volRatio: x.volRatio,
           score: x.score,
+          alertScore: auctionAlertScore(x),
           geneScore: x.geneScore,
           nodeLabel: x.nodeLabel,
           nodeTone: x.nodeTone,
           status: x.status,
-          statusLabel: x.statusLabel,
+          statusLabel: stage.key === 'final' ? '竞价定稿 · 未涨停' : '竞价锁定 · 未涨停',
+          stageKey: stage.key,
           tags: (x.tags || []).slice(0, 4),
           reasons: (x.reasons || []).slice(0, 4),
           risks: (x.risks || []).slice(0, 3),
           weakLabel: x.weakLabel || '',
           source: x.source || ''
         }))
+        .filter((x) => x.alertScore >= ALERT_SCORE_THRESHOLD)
+        .sort((a, b) => b.alertScore - a.alertScore)
+        .slice(0, ALERT_MAX_ITEMS)
     : []
 
   return {
@@ -2814,13 +2925,17 @@ function buildAuctionAlerts(payload) {
     tradeDate: p.tradeDate || '',
     tradeDateLabel: p.tradeDateLabel || '',
     threshold: ALERT_SCORE_THRESHOLD,
+    minGene: ALERT_MIN_GENE,
+    scoreMode: 'auction',
+    window: { ...win, open: windowOpen },
     count: items.length,
     items,
     notes: [
-      `预警只取竞价 / 盘中状态为“确认”且评分 ≥${ALERT_SCORE_THRESHOLD} 的候选；观察、剔除不弹窗。`,
-      '预警是条件触发，不是买入指令；催化未核验只按观察预警展示，不解除观察。',
-      '同一代码每天最多提醒一次，避免同一只票反复轰炸；预警中心保留最近记录。',
-      '9:15–9:20 试撮阶段会撤单、重挂，不触发可执行预警。'
+      win.note,
+      `竞价预警条件：未涨停、涨幅 +${ALERT_MIN_PCT}% ~ +${ALERT_MAX_PCT}%、基因 ≥${ALERT_MIN_GENE}、板块三关通过或板块昨日涨停 ≥5 家、竞价预警分 ≥${ALERT_SCORE_THRESHOLD}；有成交额数据时还要求 ≥2000 万且 ≥昨日成交 2%。`,
+      '预警分 = 基因 50% + 竞价强度 30% + 板块 12% + 昨日涨停池 8%，与竞价榜综合分不是同一口径。',
+      '同一代码每天最多提醒一次；盘中封板、已涨停、9:15–9:20 试撮都不弹。',
+      '预警是条件触发，不是买入指令；催化未核验或板块三关未过只按观察展示。'
     ]
   }
 }

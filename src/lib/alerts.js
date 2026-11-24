@@ -6,7 +6,6 @@ const HISTORY_KEY = 'longmai.alerts.history.v1'
 const SEEN_KEY = 'longmai.alerts.seen.v1'
 const MAX_HISTORY = 80
 const MAX_SEEN = 400
-const ALERT_SCORE = 72
 
 const DEFAULTS = {
   enabled: true,
@@ -208,9 +207,9 @@ function notifyDesktop(alert) {
   }
   try {
     const n = new Notification(
-      `${alert.actionable ? '可执行预警' : '观察预警'} · ${alert.name}`,
+      `竞价预警 · ${alert.actionable ? '可执行' : '观察'} · ${alert.name}`,
       {
-        body: `${alert.sector} · ${alert.statusLabel} · ${alert.score} 分\n${
+        body: `${alert.sector} · ${alert.statusLabel} · 预警分 ${alert.score}\n${
           alert.reasons[0] || ''
         }`,
         tag: alert.key,
@@ -237,6 +236,8 @@ function notifyDesktop(alert) {
 
 function makeAlert(x, payload, key, cat) {
   const at = Date.now()
+  const win = payload.window || null
+  const alertScore = x.alertScore != null ? Number(x.alertScore) : Number(x.score)
   return {
     id: `${key}:${at}`,
     key,
@@ -251,12 +252,14 @@ function makeAlert(x, payload, key, cat) {
     sectorHeat: x.sectorHeat,
     sectorTodayCount: x.sectorTodayCount,
     sectorReady: !!x.sectorReady,
+    fromPool: !!x.fromPool,
     lbc: x.lbc,
     price: x.price,
     pct: x.pct,
     limitUp: x.limitUp,
     gapToLimit: x.gapToLimit,
     sealed: !!x.sealed,
+    buyable: x.buyable !== false && !x.sealed,
     sealRatio: x.sealRatio,
     sealFund: x.sealFund == null ? null : x.sealFund,
     firstSealLabel: x.firstSealLabel,
@@ -264,19 +267,25 @@ function makeAlert(x, payload, key, cat) {
     turnover: x.turnover,
     amount: x.amount,
     amountRatio: x.amountRatio,
-    score: x.score,
+    score: Number.isFinite(alertScore) ? alertScore : x.score,
+    alertScore: x.alertScore != null ? alertScore : null,
+    auctionScore: x.score,
+    scoreLabel: '预警分',
     geneScore: x.geneScore,
     nodeLabel: x.nodeLabel,
-    statusLabel: x.statusLabel || (payload.intraday ? '封板确认' : '竞价确认'),
+    statusLabel: x.statusLabel || '竞价预警 · 未涨停',
     stageKey: payload.stage ? payload.stage.key : '',
-    stageLabel: payload.stage ? payload.stage.label : '',
+    stageLabel: win && win.open ? win.label : payload.stage ? payload.stage.label : '',
+    windowKey: win ? win.key : '',
+    windowLabel: win ? win.label : '',
     intraday: !!payload.intraday,
     tradeDateLabel: payload.tradeDateLabel || '',
     tags: Array.isArray(x.tags) ? x.tags.slice(0, 4) : [],
     reasons: Array.isArray(x.reasons) ? x.reasons.slice(0, 4) : [],
     risks: Array.isArray(x.risks) ? x.risks.slice(0, 3) : [],
     catalyst: cat,
-    actionable: cat.state === 'valid',
+    /* 催化有效只是必要条件；板块三关未过仍是观察，不静默放宽 */
+    actionable: cat.state === 'valid' && !!x.sectorReady,
     read: false
   }
 }
@@ -346,9 +355,8 @@ export function evaluateAlerts(payload) {
   refreshCatalystStates()
   if (!alertState.enabled || !payload.active) return
 
-  const items = (payload.items || []).filter(
-    (x) => x && x.code && Number(x.score) >= ALERT_SCORE
-  )
+  /* 阈值与未涨停过滤由后端统一执行，前端不再二次改口径 */
+  const items = (payload.items || []).filter((x) => x && x.code)
   const fresh = []
   for (const x of items) {
     const dateKey = payload.tradeDate || 'live'
@@ -437,24 +445,34 @@ export function testAlert() {
     name: '预警自检',
     sector: '本地测试',
     sectorKey: '',
+    fromPool: true,
     lbc: 2,
     price: null,
-    pct: 6.8,
+    pct: 5.6,
     limitUp: null,
-    sealed: true,
-    sealRatio: 1.8,
+    gapToLimit: 4.4,
+    sealed: false,
+    buyable: true,
+    sealRatio: null,
     firstSealLabel: '09:35',
     blowCount: 0,
     turnover: 6.2,
-    score: 88,
+    amount: 68000000,
+    amountRatio: 6.2,
+    score: 86,
+    alertScore: 86,
+    auctionScore: 78,
+    scoreLabel: '预警分',
     geneScore: 72,
     nodeLabel: '测试节点',
-    statusLabel: '弹窗测试',
-    stageKey: 'test',
-    stageLabel: '本地自检',
-    intraday: true,
+    statusLabel: '竞价锁定 · 未涨停',
+    stageKey: 'locked',
+    stageLabel: '9:20–9:25 不可撤单',
+    windowKey: 'locked',
+    windowLabel: '9:20–9:25 不可撤单',
+    intraday: false,
     tags: ['弹窗测试', '不对应真实个股'],
-    reasons: ['如果你看到这张卡片，说明实时预警弹窗工作正常。'],
+    reasons: ['竞价 +5.60% · 距涨停 4.4 个点，未涨停仍可挂单。'],
     risks: ['自检数据，不对应任何真实股票，不构成买入信号。'],
     catalyst: { state: 'pending', label: '测试数据' },
     actionable: false,

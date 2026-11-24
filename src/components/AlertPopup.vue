@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, watch } from 'vue'
-import { fmtMoney, fmtNum, fmtPct, fmtPrice, pctTone } from '../lib/format'
+import { fmtMoney, fmtPct, fmtPrice, pctTone } from '../lib/format'
 
 const props = defineProps({
   alert: { type: Object, default: null },
@@ -27,21 +27,30 @@ watch(
 
 onBeforeUnmount(() => clearTimeout(timer))
 
-const sealText = computed(() => {
-  const a = props.alert
-  if (!a) return '--'
-  if (a.sealRatio != null) return `${fmtNum(a.sealRatio, 2)}% 流通`
-  if (a.firstSealLabel) return a.firstSealLabel
-  return '--'
-})
-
 const gapText = computed(() => {
   const a = props.alert
   if (!a) return ''
   if (a.sealed) return '已封板'
-  if (a.gapToLimit != null) return `距涨停 ${fmtPct(a.gapToLimit, { sign: false })}`
-  if (a.limitUp != null) return `涨停价 ${fmtPrice(a.limitUp)}`
-  return ''
+  if (a.gapToLimit != null) return fmtPct(a.gapToLimit, { sign: false })
+  if (a.limitUp != null) return `涨停 ${fmtPrice(a.limitUp)}`
+  return '--'
+})
+
+const windowLine = computed(() => {
+  const a = props.alert
+  if (!a) return ''
+  if (a.sealed) return '已封板，无法挂单'
+  if (a.windowKey === 'final') return '竞价已定稿，9:30 后看开盘承接；挂单不保证成交'
+  return '未封板，竞价窗口可挂单；成交以 9:25 撮合为准'
+})
+
+const footNote = computed(() => {
+  const a = props.alert
+  if (!a || isSummary.value) return ''
+  if (a.test) return '弹窗自检：不对应真实股票，不构成买入信号。'
+  if (a.actionable) return '催化已核验且板块三关通过，仍需自行确认信源。'
+  if (!a.sectorReady) return '板块三关未过：只观察，不解除观察，不构成买入信号。'
+  return '催化尚未核验：只观察，不解除观察，不构成买入信号。'
 })
 
 function onView() {
@@ -68,14 +77,14 @@ function onCatalyst() {
         }"
         role="status"
         aria-live="polite"
-        :aria-label="isSummary ? '本轮确认汇总' : `实时预警 ${alert.name || ''}`"
+        :aria-label="isSummary ? '本轮竞价预警汇总' : `竞价预警 ${alert.name || ''}`"
       >
         <div class="alert-glow" aria-hidden="true"></div>
 
         <header class="alert-head">
           <span class="alert-kicker">
             <i class="alert-dot"></i>
-            {{ isSummary ? '实时预警 · 本轮汇总' : actionable ? '实时预警 · 可执行' : '实时预警 · 观察' }}
+            {{ isSummary ? '竞价预警 · 本轮汇总' : actionable ? '竞价预警 · 可挂单' : '竞价预警 · 观察' }}
           </span>
           <span class="alert-head-right">
             <span v-if="queued" class="alert-queued">还有 {{ queued }} 条</span>
@@ -91,9 +100,9 @@ function onCatalyst() {
         <template v-if="isSummary">
           <div class="alert-summary">
             <div class="alert-summary-main">
-              <b>本轮已有 {{ alert.names.length }} 只触发条件</b>
+              <b>本轮竞价预警 {{ alert.names.length }} 只</b>
               <p>
-                首次连接只汇总一次，避免一开页就被逐只弹窗淹没；之后新确认的票会逐只提醒。
+                均未涨停；首次连接只汇总一次，避免一开页就被逐只弹窗淹没，之后新达标的票逐只提醒。
               </p>
             </div>
             <div class="alert-summary-count">
@@ -105,7 +114,7 @@ function onCatalyst() {
             <span v-for="name in alert.names" :key="name" class="alert-name">{{ name }}</span>
           </div>
           <p class="alert-foot-note">
-            预警只是条件触发，不是买入指令。催化未核验的票继续按观察处理。
+            预警只是条件触发，不是买入指令。均未涨停；催化未核验或板块三关未过继续按观察处理。
           </p>
           <div class="alert-actions">
             <button class="btn btn--sm btn--gold" @click="emit('center')">打开预警中心</button>
@@ -132,7 +141,7 @@ function onCatalyst() {
             </div>
             <div class="alert-score">
               <b>{{ alert.score }}</b>
-              <small>{{ alert.intraday ? '实时分' : '竞价分' }}</small>
+              <small>{{ alert.scoreLabel || '预警分' }}</small>
             </div>
           </div>
 
@@ -154,11 +163,11 @@ function onCatalyst() {
               <b class="mono" :class="pctTone(alert.pct)">{{ fmtPct(alert.pct) }}</b>
             </div>
             <div class="aq">
-              <small>封单 / 首封</small>
-              <b class="mono">{{ sealText }}</b>
+              <small>距涨停</small>
+              <b class="mono">{{ gapText }}</b>
             </div>
             <div class="aq">
-              <small>成交额</small>
+              <small>竞价额</small>
               <b class="mono">{{ fmtMoney(alert.amount, { sign: false }) }}</b>
             </div>
           </div>
@@ -169,11 +178,12 @@ function onCatalyst() {
           <div v-if="alert.risks && alert.risks.length" class="alert-risks">
             <p>! {{ alert.risks[0] }}</p>
           </div>
-          <p v-if="gapText" class="alert-gap">{{ gapText }} · 炸板 {{ alert.blowCount || 0 }} 次</p>
-
-          <p class="alert-foot-note">
-            {{ actionable ? '催化已有本地核验记录，仍需自行确认信源。' : '催化尚未核验：只观察，不解除观察，不构成买入信号。' }}
+          <p class="alert-gap">
+            {{ windowLine }}
+            <template v-if="alert.limitUp != null"> · 涨停价 {{ fmtPrice(alert.limitUp) }}</template>
           </p>
+
+          <p class="alert-foot-note">{{ footNote }}</p>
 
           <div class="alert-actions">
             <button class="btn btn--sm btn--gold" @click="onView">查看盘面</button>

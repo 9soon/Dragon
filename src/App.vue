@@ -28,7 +28,8 @@ import {
 const TAB_KEY = 'longmai.tab.v1'
 const TAB_LIST = ['mainline', 'picks', 'edge', 'review', 'strategy']
 const INDEX_SECID = '1.000001'
-const ALERT_MARKET_KEYS = ['auction', 'waiting', 'morning', 'afternoon']
+/* 预警只在竞价窗口轮询：auction=9:15–9:25，waiting=9:25–9:30；盘中不弹 */
+const ALERT_MARKET_KEYS = ['auction', 'waiting']
 const savedTab = (() => {
   try {
     return localStorage.getItem(TAB_KEY)

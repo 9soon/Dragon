@@ -99,7 +99,7 @@ function verify(item) {
         {{ alertState.enabled ? '预警开启' : '预警关闭' }}
       </span>
       <span class="ac-status-text">
-        只在竞价 / 盘中检查，3 秒一轮；休市不扫描。
+        只在竞价 9:20–9:30 检查，3 秒一轮；盘中 / 休市不弹。
       </span>
     </div>
 
@@ -116,7 +116,7 @@ function verify(item) {
       >
         <span class="switch-copy">
           <b>实时预警</b>
-          <small>竞价 / 盘中状态为“确认”且评分 ≥72 时弹窗</small>
+          <small>竞价 9:20–9:30 出现未涨停强势票时弹窗（预警分 ≥70）</small>
         </span>
         <span class="switch" :class="{ 'is-on': alertState.enabled }"><i></i></span>
       </button>
@@ -129,7 +129,7 @@ function verify(item) {
       >
         <span class="switch-copy">
           <b>未核验催化也提醒</b>
-          <small>开启时只标“观察预警”；关闭后只提醒已核验催化的票</small>
+          <small>开启时只标“观察预警”；关闭后只提醒催化已核验的票，板块三关未过仍只观察</small>
         </span>
         <span class="switch" :class="{ 'is-on': alertState.includePending }"><i></i></span>
       </button>
@@ -174,9 +174,10 @@ function verify(item) {
     </header>
 
     <div v-if="!history.length" class="ac-empty">
-      <b>还没有触发记录</b>
+      <b>还没有竞价预警</b>
       <p>
-        当候选同时满足「强封 / 竞价确认」「评分 ≥72」「非纯传闻」时才会记录并弹窗。
+        当候选在竞价 9:20–9:30 满足「未涨停」「涨幅 +2% ~ +8%」「基因 ≥65」
+        「板块三关通过或板块昨日涨停 ≥5 家」「预警分 ≥70」时才会记录并弹窗。
         没有合格票就不弹，空仓也是有效决策。
       </p>
     </div>
@@ -212,7 +213,7 @@ function verify(item) {
         </div>
         <div class="ae-score">
           <b>{{ item.score }}</b>
-          <small>分</small>
+          <small>预警分</small>
         </div>
       </div>
 
@@ -223,10 +224,15 @@ function verify(item) {
         <span v-if="item.pct != null" class="mono" :class="pctTone(item.pct)">
           {{ fmtPct(item.pct) }}
         </span>
-        <span v-if="item.sealRatio != null" class="mono">
-          封单 {{ fmtNum(item.sealRatio, 2) }}%
+        <span v-if="item.gapToLimit != null && !item.sealed" class="mono">
+          距涨停 {{ fmtPct(item.gapToLimit, { sign: false }) }}
         </span>
-        <span v-if="item.firstSealLabel" class="mono">首封 {{ item.firstSealLabel }}</span>
+        <span v-if="item.sealRatio != null" class="mono">
+          {{ item.windowKey ? '昨封单' : '封单' }} {{ fmtNum(item.sealRatio, 2) }}%
+        </span>
+        <span v-if="item.firstSealLabel" class="mono">
+          {{ item.windowKey ? '昨首封' : '首封' }} {{ item.firstSealLabel }}
+        </span>
         <span v-if="item.geneScore != null" class="mono">基因 {{ item.geneScore }}</span>
       </div>
 
@@ -245,12 +251,13 @@ function verify(item) {
     <section class="ac-rules">
       <h4>触发与去重规则</h4>
       <ul>
-        <li>只取竞价定稿 / 盘中封板状态为“确认”且评分 ≥72 的候选；观察、剔除不弹。</li>
-        <li>同一代码每天最多提醒一次；首次打开只汇总一次，之后新确认逐只弹窗。</li>
-        <li>纯传闻直接不提醒；催化未核验只算观察预警，不解除观察。</li>
-        <li>9:15–9:20 试撮可撤单，不触发可执行预警。</li>
-        <li>页面需要保持打开；浏览器会限制后台定时器，桌面通知也只是尽力送达。</li>
-        <li>预警是条件触发的提醒，不是买入指令；没有合格票就不出手。</li>
+        <li>只在竞价 9:20–9:25（不可撤单）和 9:25–9:30（定稿）检查；盘中封板、已经涨停的票不弹。</li>
+        <li>只提醒未涨停、涨幅 +2% ~ +8% 的候选；贴涨停或封死买不进的直接排除。</li>
+        <li>同时要求基因 ≥65、板块三关通过或板块昨日涨停 ≥5 家、竞价预警分 ≥70；有成交额数据时还要求 ≥2000 万且 ≥昨日成交 2%。</li>
+        <li>预警分 = 基因 50% + 竞价强度 30% + 板块 12% + 昨日涨停池 8%，与竞价榜综合分不是同一口径。</li>
+        <li>同一代码每天最多提醒一次；首次连接只汇总一次，之后新达标逐只弹窗。9:15–9:20 试撮不触发。</li>
+        <li>纯传闻不提醒；催化未核验或板块三关未过只算观察预警，不解除观察。</li>
+        <li>预警不是买入指令；9:25 后看开盘承接，不保证成交。页面需保持打开，桌面通知只是尽力送达。</li>
       </ul>
     </section>
   </BottomSheet>
