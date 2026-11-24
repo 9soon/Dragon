@@ -1,9 +1,9 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ScoreRing from '../components/ScoreRing.vue'
 import { getAuction, getDragonProfile, getOvernight } from '../lib/api'
 import { catalystType, isCatalystValid, useCatalysts } from '../lib/catalysts'
-import { openCatalyst, toast } from '../lib/ui'
+import { openCatalyst, toast, ui } from '../lib/ui'
 import { fmtCap, fmtMoney, fmtNum, fmtPct, fmtPrice, pctTone, timeLabel } from '../lib/format'
 
 const props = defineProps({
@@ -364,6 +364,38 @@ function editCatalyst(key, extra) {
   openCatalyst(sectorOf(key, extra))
 }
 
+async function focusAlertStock(code) {
+  if (!code) return
+  segment.value = 'auction'
+  for (let i = 0; i < 3 && !auction.value; i++) {
+    await loadAuction()
+    if (!auction.value) await new Promise((resolve) => setTimeout(resolve, 900))
+  }
+  const idx = auctionCards.value.findIndex((x) => x.code === code)
+  if (idx < 0) {
+    toast('预警票不在当前候选清单，可能已转入观察或剔除')
+    ui.alertFocus = ''
+    return
+  }
+  if (idx >= 6) showAllAuction.value = true
+  await nextTick()
+  const el = document.querySelector(`[data-alert-code="${code}"]`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('is-alert-flash')
+    setTimeout(() => el.classList.remove('is-alert-flash'), 2800)
+  }
+  ui.alertFocus = ''
+}
+
+watch(
+  () => ui.alertFocus,
+  (code) => {
+    if (code) focusAlertStock(code)
+  },
+  { immediate: true }
+)
+
 async function copyPlan(c) {
   const catText = c.cat.valid ? `已核验（${c.cat.label}）` : '未核验（禁止挂单）'
   const text = [
@@ -686,6 +718,7 @@ onBeforeUnmount(() => {
           :key="c.code"
           class="ac-card"
           :class="{ 'is-actionable': c.actionable, 'is-preview': !auction.active }"
+          :data-alert-code="c.code"
         >
           <div class="ac-top">
             <span class="ac-rank">{{ idx + 1 }}</span>
@@ -1830,6 +1863,21 @@ onBeforeUnmount(() => {
 .ac-card.is-actionable {
   border-color: rgba(243, 199, 119, 0.36);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 28px rgba(243, 199, 119, 0.07);
+}
+
+.ac-card.is-alert-flash {
+  border-color: rgba(255, 84, 96, 0.7);
+  animation: alertFlash 1.2s ease 2;
+}
+
+@keyframes alertFlash {
+  0%,
+  100% {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 0 0 rgba(255, 84, 96, 0);
+  }
+  50% {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 32px rgba(255, 84, 96, 0.38);
+  }
 }
 
 .ac-card.is-preview {

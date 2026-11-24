@@ -44,6 +44,7 @@ const {
 } = require('./gene')
 const {
   buildAuction,
+  buildAuctionAlerts,
   buildOvernight,
   buildReviewPlan,
   getDragonProfile,
@@ -614,6 +615,32 @@ async function getDashboard({ force = false } = {}) {
   return building
 }
 
+/* 竞价 / 盘中扫描成本高，页面与实时预警共用一份短缓存，避免重复扫描 */
+const AUCTION_SHARED_TTL = 1500
+let auctionCacheData = null
+let auctionCacheAt = 0
+let auctionCachePromise = null
+
+async function getSharedAuction() {
+  const now = Date.now()
+  if (auctionCacheData && now - auctionCacheAt < AUCTION_SHARED_TTL) {
+    return auctionCacheData
+  }
+  if (auctionCachePromise) return auctionCachePromise
+  auctionCachePromise = (async () => {
+    const dashboard = await getDashboard()
+    const data = await buildAuction({ dashboard, profile: peekDragonProfile() })
+    auctionCacheData = data
+    auctionCacheAt = Date.now()
+    return data
+  })()
+  try {
+    return await auctionCachePromise
+  } finally {
+    auctionCachePromise = null
+  }
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -734,9 +761,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/auction') {
-      const dashboard = await getDashboard()
-      const data = await buildAuction({ dashboard, profile: peekDragonProfile() })
+      const data = await getSharedAuction()
       sendJson(res, 200, data)
+      return
+    }
+
+    if (pathname === '/api/alerts') {
+      const auction = await getSharedAuction()
+      sendJson(res, 200, buildAuctionAlerts(auction))
       return
     }
 

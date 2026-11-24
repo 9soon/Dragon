@@ -4,7 +4,8 @@ export const ui = reactive({
   catalystSector: null,
   pick: null,
   warningsOpen: false,
-  toast: null
+  toast: null,
+  alertFocus: ''
 })
 
 let toastTimer = null

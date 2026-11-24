@@ -60,6 +60,10 @@ export function getAuction() {
   return request('/api/auction', { timeout: 18000 })
 }
 
+export function getAlerts() {
+  return request('/api/alerts', { timeout: 12000 })
+}
+
 export function getOvernight() {
   return request('/api/overnight', { timeout: 18000 })
 }

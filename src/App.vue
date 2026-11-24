@@ -6,17 +6,29 @@ import WarningBar from './components/WarningBar.vue'
 import SkeletonView from './components/SkeletonView.vue'
 import CatalystSheet from './components/CatalystSheet.vue'
 import PickSheet from './components/PickSheet.vue'
+import AlertPopup from './components/AlertPopup.vue'
+import AlertCenter from './components/AlertCenter.vue'
 import MainlineView from './views/MainlineView.vue'
 import PicksView from './views/PicksView.vue'
 import EdgeView from './views/EdgeView.vue'
 import ReviewView from './views/ReviewView.vue'
 import StrategyView from './views/StrategyView.vue'
-import { getDashboard, getQuotes } from './lib/api'
-import { ui, closeCatalyst, closePick, toast } from './lib/ui'
+import { getDashboard, getQuotes, getAlerts } from './lib/api'
+import { ui, closeCatalyst, closePick, toast, openCatalyst } from './lib/ui'
+import {
+  alertState,
+  evaluateAlerts,
+  setAlertError,
+  unreadAlerts,
+  openAlertCenter,
+  dismissAlert,
+  closeAlertCenter
+} from './lib/alerts'
 
 const TAB_KEY = 'longmai.tab.v1'
 const TAB_LIST = ['mainline', 'picks', 'edge', 'review', 'strategy']
 const INDEX_SECID = '1.000001'
+const ALERT_MARKET_KEYS = ['auction', 'waiting', 'morning', 'afternoon']
 const savedTab = (() => {
   try {
     return localStorage.getItem(TAB_KEY)
@@ -38,9 +50,11 @@ const now = ref(new Date())
 
 let dashTimer = null
 let quoteTimer = null
+let alertTimer = null
 let clockTimer = null
 let quoteBusy = false
 let dashBusy = false
+let alertBusy = false
 let toastOnError = false
 
 const clock = computed(() =>
@@ -54,6 +68,9 @@ const clock = computed(() =>
 )
 
 const isLive = computed(() => !!(dashboard.value && dashboard.value.market && dashboard.value.market.live))
+const marketKey = computed(
+  () => (dashboard.value && dashboard.value.market && dashboard.value.market.key) || 'closed'
+)
 const warnings = computed(() => (dashboard.value && dashboard.value.warnings) || [])
 const staleBackend = computed(() => {
   const d = dashboard.value
@@ -153,21 +170,71 @@ function scheduleDashboard() {
   }, isLive.value ? 10000 : 60000)
 }
 
+async function pollAlerts() {
+  if (alertBusy || !alertState.enabled) return
+  if (!ALERT_MARKET_KEYS.includes(marketKey.value)) return
+  if (document.hidden && !alertState.desktop) return
+  alertBusy = true
+  try {
+    const data = await getAlerts()
+    evaluateAlerts(data)
+  } catch (err) {
+    setAlertError(err.message || '预警接口读取失败')
+  } finally {
+    alertBusy = false
+  }
+}
+
+function scheduleAlerts() {
+  clearTimeout(alertTimer)
+  const delay = ALERT_MARKET_KEYS.includes(marketKey.value) ? 3000 : 10000
+  alertTimer = setTimeout(() => {
+    if (document.hidden && !alertState.desktop) {
+      scheduleAlerts()
+      return
+    }
+    pollAlerts()
+    scheduleAlerts()
+  }, delay)
+}
+
 async function manualRefresh() {
   await loadDashboard({ force: true })
   await pollQuotes()
+  pollAlerts()
+}
+
+function viewAlertStock(alert) {
+  if (!alert || !alert.code) return
+  dismissAlert()
+  ui.alertFocus = alert.code
+  active.value = 'edge'
+}
+
+function openAlertCatalyst(alert) {
+  if (!alert || !alert.sectorKey) return
+  dismissAlert()
+  openCatalyst({
+    key: alert.sectorKey,
+    name: alert.sector || alert.sectorKey,
+    heat: alert.sectorHeat != null ? alert.sectorHeat : '--',
+    todayCount: alert.sectorTodayCount != null ? alert.sectorTodayCount : '--'
+  })
 }
 
 function handleVisibility() {
   if (document.hidden) {
     clearTimeout(dashTimer)
     clearTimeout(quoteTimer)
+    if (!alertState.desktop) clearTimeout(alertTimer)
     return
   }
   loadDashboard({ silent: true })
   pollQuotes()
+  pollAlerts()
   scheduleDashboard()
   scheduleQuotes()
+  scheduleAlerts()
 }
 
 watch(active, (tab) => {
@@ -186,6 +253,17 @@ watch(
   }
 )
 
+watch(marketKey, (key) => {
+  if (ALERT_MARKET_KEYS.includes(key) && !document.hidden) pollAlerts()
+})
+
+watch(
+  () => alertState.enabled,
+  (on) => {
+    if (on && !document.hidden) pollAlerts()
+  }
+)
+
 onMounted(() => {
   clockTimer = setInterval(() => {
     now.value = new Date()
@@ -193,14 +271,17 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibility)
   loadDashboard({ silent: false }).then(() => {
     pollQuotes()
+    pollAlerts()
     scheduleQuotes()
     scheduleDashboard()
+    scheduleAlerts()
   })
 })
 
 onBeforeUnmount(() => {
   clearTimeout(dashTimer)
   clearTimeout(quoteTimer)
+  clearTimeout(alertTimer)
   clearInterval(clockTimer)
   document.removeEventListener('visibilitychange', handleVisibility)
 })
@@ -212,7 +293,10 @@ onBeforeUnmount(() => {
       :dashboard="dashboard"
       :clock="clock"
       :refreshing="refreshing"
+      :unread-alerts="unreadAlerts"
+      :alert-enabled="alertState.enabled"
       @refresh="manualRefresh"
+      @open-alerts="openAlertCenter"
     />
 
     <div v-if="staleBackend" class="stale-bar">
@@ -268,6 +352,16 @@ onBeforeUnmount(() => {
 
     <CatalystSheet :sector="ui.catalystSector" />
     <PickSheet :pick="ui.pick" :quote="ui.pick ? quotes[ui.pick.code] : null" />
+
+    <AlertPopup
+      :alert="alertState.current"
+      :queued="alertState.queue.length"
+      @close="dismissAlert"
+      @center="openAlertCenter"
+      @view="viewAlertStock"
+      @catalyst="openAlertCatalyst"
+    />
+    <AlertCenter :open="alertState.centerOpen" @close="closeAlertCenter" />
 
     <Transition name="toast">
       <div

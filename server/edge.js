@@ -2631,6 +2631,8 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       sector: c.sector,
       sectorKey: c.sectorKey,
       sectorHeat: c.sectorHeat,
+      sectorTodayCount: c.sectorTodayCount == null ? null : c.sectorTodayCount,
+      sectorReady: !!c.sectorReady,
       industry: c.industry || '',
       lbc: c.lbc,
       fromPool: c.fromPool,
@@ -2740,6 +2742,86 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     source: stage.intraday
       ? '东方财富全市场涨幅榜 + 涨停池 + 腾讯五档；约 2 秒轮询，仅交易时段计算'
       : '东方财富涨停池 + 全市场扫描 + 腾讯行情；约 2 秒轮询，竞价 9:15–9:30 计算'
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 实时预警：只取竞价 / 盘中“确认”且评分达标的候选
+ *  - 预警是条件触发，不是买入指令
+ *  - 只给前端做弹窗，不改变仪表盘与竞价候选口径
+ * ------------------------------------------------------------------ */
+
+const ALERT_SCORE_THRESHOLD = 72
+
+function buildAuctionAlerts(payload) {
+  const p = payload || {}
+  const active = !!p.active
+  const stage = p.stage || { key: 'off', label: '非交易时段', active: false }
+  const items = active
+    ? (p.candidates || [])
+        .filter(
+          (x) =>
+            x &&
+            x.status === 'confirm' &&
+            num(x.score, 0) >= ALERT_SCORE_THRESHOLD &&
+            x.code
+        )
+        .map((x) => ({
+          code: x.code,
+          secid: x.secid,
+          name: x.name,
+          sector: x.sector,
+          sectorKey: x.sectorKey,
+          sectorHeat: x.sectorHeat,
+          sectorTodayCount: x.sectorTodayCount,
+          sectorReady: !!x.sectorReady,
+          lbc: x.lbc,
+          price: x.price,
+          pct: x.pct,
+          limitUp: x.limitUp,
+          gapToLimit: x.gapToLimit,
+          sealed: !!x.sealed,
+          sealRatio: x.sealRatio,
+          sealFund: x.sealFund == null ? null : x.sealFund,
+          firstSealLabel: x.firstSealLabel,
+          blowCount: x.blowCount,
+          turnover: x.turnover,
+          amount: x.amount,
+          amountRatio: x.amountRatio,
+          volRatio: x.volRatio,
+          score: x.score,
+          geneScore: x.geneScore,
+          nodeLabel: x.nodeLabel,
+          nodeTone: x.nodeTone,
+          status: x.status,
+          statusLabel: x.statusLabel,
+          tags: (x.tags || []).slice(0, 4),
+          reasons: (x.reasons || []).slice(0, 4),
+          risks: (x.risks || []).slice(0, 3),
+          weakLabel: x.weakLabel || '',
+          source: x.source || ''
+        }))
+    : []
+
+  return {
+    ok: true,
+    generatedAt: p.generatedAt || new Date().toISOString(),
+    quoteAt: p.quoteAt || null,
+    active,
+    intraday: !!p.intraday,
+    stage,
+    market: p.market || null,
+    tradeDate: p.tradeDate || '',
+    tradeDateLabel: p.tradeDateLabel || '',
+    threshold: ALERT_SCORE_THRESHOLD,
+    count: items.length,
+    items,
+    notes: [
+      `预警只取竞价 / 盘中状态为“确认”且评分 ≥${ALERT_SCORE_THRESHOLD} 的候选；观察、剔除不弹窗。`,
+      '预警是条件触发，不是买入指令；催化未核验只按观察预警展示，不解除观察。',
+      '同一代码每天最多提醒一次，避免同一只票反复轰炸；预警中心保留最近记录。',
+      '9:15–9:20 试撮阶段会撤单、重挂，不触发可执行预警。'
+    ]
   }
 }
 
@@ -3074,6 +3156,7 @@ module.exports = {
   boardRuleLabel,
   auctionStage,
   buildAuction,
+  buildAuctionAlerts,
   buildOvernight,
   buildReviewPlan,
   getDragonProfile,
