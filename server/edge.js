@@ -2327,7 +2327,6 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   for (const stock of pool) {
     if (!stock.code || /ST/i.test(stock.name || '')) continue
     if (!/^\d{6}$/.test(stock.code)) continue
-    if (is20cmCode(stock.code)) continue
     const sector = sectorByName.get(stock.sector) || null
     const sealRatio = sealRatioOf(stock)
     map.set(stock.code, {
@@ -2361,7 +2360,6 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   for (const sector of (dashboard.sectors && dashboard.sectors.mainCandidates) || []) {
     const lead = sector.board && sector.board.leadCode
     if (!lead || map.has(lead) || !/^\d{6}$/.test(lead)) continue
-    if (is20cmCode(lead)) continue
     map.set(lead, {
       code: lead,
       secid: `${/^6/.test(lead) ? 1 : 0}.${lead}`,
@@ -2396,7 +2394,6 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       for (const q of scan.items || []) {
         if (!q.code || map.has(q.code)) continue
         if (!/^\d{6}$/.test(q.code)) continue
-        if (is20cmCode(q.code)) continue
         const industry = q.industry || ''
         const sector = matchSectorLoose(industry)
         map.set(q.code, {
@@ -2495,6 +2492,8 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
 
   const strong = []
   for (const c of live) {
+    /* 20cm 仍参与同板块强势度统计，但不进入榜单 / 预警 / 可执行候选 */
+    if (is20cmCode(c.code)) continue
     if (c.pct == null) continue
     const pct = c.pct
     const limitPct = limitRatioFor(c.code) * 100
