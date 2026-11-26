@@ -183,6 +183,21 @@ const auctionWatch = computed(
 const auctionStage = computed(() => (auction.value && auction.value.stage) || null)
 const auctionActive = computed(() => !!(auction.value && auction.value.active))
 const auctionIsIntraday = computed(() => !!(auction.value && auction.value.intraday))
+
+/* 尾盘预期：14:30–15:00 的未涨停明日观察榜，和隔夜三强分开 */
+const tailBoard = computed(() => (auction.value && auction.value.tail) || null)
+const tailItems = computed(() => (tailBoard.value && tailBoard.value.items) || [])
+const tailPlanOpen = ref('')
+const tailChipClass = computed(() => {
+  const status = tailBoard.value ? tailBoard.value.status : ''
+  if (status === 'ready' || status === 'closed') return 'chip--gold'
+  if (status === 'empty') return 'chip--warn'
+  return 'chip--dim'
+})
+
+function toggleTailPlan(code) {
+  tailPlanOpen.value = tailPlanOpen.value === code ? '' : code
+}
 const auctionSteps = [
   { key: 'trial', time: '9:15', label: '试撮' },
   { key: 'locked', time: '9:20', label: '锁单' },
@@ -586,7 +601,10 @@ watch(segment, (value) => {
 watch(marketKey, (key, old) => {
   if (key === old) return
   if (['preopen', 'auction', 'waiting'].includes(key)) loadAuction({ silent: true })
-  if (key === 'closed') loadOvernight({ silent: true })
+  if (key === 'closed') {
+    loadAuction({ silent: true })
+    loadOvernight({ silent: true })
+  }
   if (segment.value === 'auction') scheduleAuction()
   if (segment.value === 'overnight') scheduleOvernight()
 })
@@ -749,6 +767,127 @@ onBeforeUnmount(() => {
         </div>
 
         <AlertRecommendations v-if="auction.active || recommendationTotal" :live="recommendationLive" />
+
+        <section v-if="tailBoard" class="tail-section" :class="`tail-section--${tailBoard.status}`">
+          <header class="section-head tail-head">
+            <span class="section-title">尾盘预期 · 明日观察</span>
+            <span class="chip" :class="tailChipClass">{{ tailBoard.statusLabel }}</span>
+            <span class="section-count">
+              {{ tailBoard.window }}
+              <template v-if="tailBoard.updatedTime"> · {{ tailBoard.updatedTime }}</template>
+            </span>
+          </header>
+
+          <p v-if="tailBoard.status !== 'before'" class="tail-reason">{{ tailBoard.reason }}</p>
+
+          <div v-if="tailItems.length" class="tail-list">
+            <article v-for="(t, idx) in tailItems" :key="t.code" class="ac-card tail-card">
+              <div class="ac-top">
+                <span class="ac-rank tail-rank">尾{{ t.rank || idx + 1 }}</span>
+                <div class="ac-id">
+                  <div class="ac-name">
+                    <b>{{ t.name }}</b>
+                    <span class="mono">{{ t.code }}</span>
+                  </div>
+                  <div class="ac-sub">
+                    <span>{{ t.sector }}</span>
+                    <i v-if="t.lbc">· 昨 {{ t.lbc }} 板</i>
+                    <i v-if="t.sectorHeat != null">· 热度 {{ t.sectorHeat }}</i>
+                    <i v-if="t.boardRule">· {{ t.boardRule }}</i>
+                  </div>
+                </div>
+                <div class="ac-ring">
+                  <ScoreRing :value="t.score" :size="52" :stroke="4" />
+                  <small>预期分</small>
+                </div>
+              </div>
+
+              <div class="chip-row">
+                <span class="chip chip--gold">今日未涨停</span>
+                <span class="chip" :class="t.sectorReady ? 'chip--gold' : 'chip--dim'">
+                  {{ t.sectorReady ? '板块三关' : '板块未过三关' }}
+                </span>
+                <span v-for="tag in t.tags" :key="tag" class="tag">{{ tag }}</span>
+              </div>
+
+              <div class="metric-grid">
+                <div class="metric">
+                  <small>今日涨幅</small>
+                  <b :class="pctTone(t.pct)">{{ fmtPct(t.pct) }}</b>
+                  <span>距离涨停 {{ fmtPct(t.gapToLimit, { sign: false }) }}</span>
+                </div>
+                <div class="metric">
+                  <small>收盘位置</small>
+                  <b class="mono">{{ t.closeStrength }}%</b>
+                  <span>{{ fmtPrice(t.low) }} – {{ fmtPrice(t.high) }}</span>
+                </div>
+                <div class="metric">
+                  <small>成交 / 量比</small>
+                  <b class="mono">{{ fmtMoney(t.amount, { sign: false }) }}</b>
+                  <span>
+                    {{ t.volRatio == null ? '量比缺失' : `量比 ${fmtNum(t.volRatio, 2)}` }}
+                    <template v-if="t.turnover != null"> · 换手 {{ fmtNum(t.turnover, 1) }}%</template>
+                  </span>
+                </div>
+                <div class="metric">
+                  <small>基因 / 节点</small>
+                  <b>{{ t.geneScore }}</b>
+                  <span>
+                    {{ t.nodeLabel || '非涨停池' }}
+                    {{ t.nodeScore == null ? '' : t.nodeScore }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="ac-lines">
+                <p v-for="line in (t.reasons || []).slice(0, 3)" :key="line"><span>·</span>{{ line }}</p>
+              </div>
+              <div v-if="t.risks && t.risks.length" class="ac-risks">
+                <p v-for="line in t.risks.slice(0, 2)" :key="line">! {{ line }}</p>
+              </div>
+
+              <div class="tail-plan">
+                <div class="tail-plan-head">
+                  <b>明日观察条件</b>
+                  <button class="link-btn" @click="toggleTailPlan(t.code)">
+                    {{ tailPlanOpen === t.code ? '收起' : '展开全部' }}
+                  </button>
+                </div>
+                <p
+                  v-for="line in (tailPlanOpen === t.code ? t.plan || [] : (t.plan || []).slice(0, 1))"
+                  :key="line"
+                >· {{ line }}</p>
+              </div>
+
+              <div class="ac-foot">
+                <span class="tail-time mono">
+                  <template v-if="t.recommendTime">推荐 {{ t.recommendTime }} · </template>
+                  最近 {{ t.lastSeenTime || '--:--' }}
+                </span>
+                <button class="link-btn" @click="editCatalyst(t.sectorKey, t)">核验催化</button>
+              </div>
+            </article>
+          </div>
+
+          <div v-else-if="tailBoard.status !== 'before'" class="tail-empty">
+            <div v-if="tailBoard.counts && tailBoard.counts.length" class="tail-counts">
+              <span v-for="c in tailBoard.counts" :key="c.reason">{{ c.reason }} {{ c.count }}</span>
+            </div>
+            <div v-if="tailBoard.nearMiss && tailBoard.nearMiss.length" class="tail-near">
+              <div v-for="n in tailBoard.nearMiss" :key="n.code" class="tail-near-row">
+                <b>{{ n.name }}</b>
+                <span v-if="n.pct != null" class="mono">{{ fmtPct(n.pct) }}</span>
+                <span class="mono">预期分 {{ n.score }}</span>
+                <em>{{ n.reason }}</em>
+              </div>
+            </div>
+            <p class="tail-note">
+              没有同时满足条件的票就不补位；尾盘预期不是隔夜三强，也不进入条件单草稿。
+            </p>
+          </div>
+
+          <p v-else class="tail-note">{{ tailBoard.note }}</p>
+        </section>
 
         <header class="section-head">
           <span class="section-title">{{ auction.active ? (auction.intraday ? '盘中强势候选' : '竞价观察池') : '下一场竞价的准备池' }}</span>
@@ -951,6 +1090,7 @@ onBeforeUnmount(() => {
             <div class="rule-line"><span>06</span><p>只做非双创标的；科创板 688/689、创业板 300/301 的 20cm 不进入榜单和预警。</p></div>
             <div class="rule-line"><span>07</span><p>预警推荐只保留未封板、距涨停 &gt;0.3 个点且预警分 ≥70 的票，按预警分从强到弱最多 3 只；已封板只排队观察，不弹“买不进”的票。</p></div>
             <div class="rule-line"><span>08</span><p>推荐时间、最近更新时间保存在浏览器本地，刷新页面不会清空；当前榜单变化只影响“在榜 / 已移出”，不改写首次推荐时间。</p></div>
+            <div class="rule-line"><span>09</span><p>14:30–15:00 另算「尾盘预期」：今天没涨停、距涨停 &gt;0.5 点、收盘位置 ≥60%、基因 ≥68、板块共振，最多 3 只；只作明日观察，不是隔夜三强，也不进入条件单草稿。</p></div>
           </template>
           <template v-else>
             <div class="rule-line"><span>01</span><p>9:15–9:20 可撤单，只看不追；虚假挂单不计入判断。</p></div>
@@ -1947,6 +2087,158 @@ onBeforeUnmount(() => {
 
 .ac-card.is-preview {
   background: linear-gradient(158deg, rgba(17, 23, 35, 0.9), rgba(9, 12, 19, 0.95));
+}
+
+/* ---------- tail expectation ---------- */
+
+.tail-section {
+  margin-top: 12px;
+  padding: 11px 12px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(243, 199, 119, 0.2);
+  background:
+    radial-gradient(110% 120% at 100% 0%, rgba(243, 199, 119, 0.07), transparent 60%),
+    rgba(255, 255, 255, 0.02);
+}
+
+.tail-section--empty,
+.tail-section--none {
+  border-style: dashed;
+}
+
+.tail-head {
+  flex-wrap: wrap;
+  row-gap: 3px;
+}
+
+.tail-head .section-title {
+  white-space: nowrap;
+  color: var(--gold);
+}
+
+.tail-head .section-count {
+  margin-left: auto;
+}
+
+.tail-reason {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.tail-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 9px;
+}
+
+.tail-card {
+  border-color: rgba(243, 199, 119, 0.2);
+  background: linear-gradient(158deg, rgba(24, 24, 20, 0.94), rgba(9, 13, 20, 0.95));
+}
+
+.tail-rank {
+  width: auto;
+  min-width: 26px;
+  padding: 0 4px;
+  border-color: rgba(243, 199, 119, 0.3);
+  background: rgba(243, 199, 119, 0.08);
+  color: var(--gold);
+  font-size: 10px;
+}
+
+.tail-plan {
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(243, 199, 119, 0.18);
+  background: rgba(243, 199, 119, 0.04);
+}
+
+.tail-plan-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tail-plan-head b {
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  color: var(--gold);
+}
+
+.tail-plan p {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+
+.tail-time {
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.03em;
+}
+
+.tail-empty {
+  margin-top: 8px;
+}
+
+.tail-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.tail-counts span {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.tail-near {
+  margin-top: 7px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.07);
+}
+
+.tail-near-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.05);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.tail-near-row:first-child {
+  border-top: 0;
+}
+
+.tail-near-row b {
+  font-size: 11.5px;
+  color: var(--text-soft);
+}
+
+.tail-near-row em {
+  margin-left: auto;
+  font-style: normal;
+  color: var(--warn);
+  text-align: right;
+}
+
+.tail-note {
+  margin: 7px 0 0;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--dim);
 }
 
 .ac-top {

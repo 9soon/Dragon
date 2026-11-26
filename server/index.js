@@ -45,6 +45,7 @@ const {
 const {
   buildAuction,
   buildAuctionAlerts,
+  tailBoardFromSnapshot,
   buildOvernight,
   buildReviewPlan,
   getDragonProfile,
@@ -590,6 +591,63 @@ async function buildDashboard() {
     warnings.push(`隔夜计划生成失败：${err.message}`)
   }
 
+  /* 尾盘预期只读当天留痕：收盘后复盘用，不拿收盘价倒推 14:30 的信号 */
+  try {
+    const tail = tailBoardFromSnapshot(dashboard.tradeDate, market)
+    const trimTail = (item) => ({
+      rank: item.rank,
+      code: item.code,
+      name: item.name,
+      sector: item.sector,
+      sectorKey: item.sectorKey,
+      sectorHeat: item.sectorHeat,
+      sectorReady: !!item.sectorReady,
+      sectorTodayCount: item.sectorTodayCount,
+      lbc: item.lbc,
+      price: item.price,
+      pct: item.pct,
+      limitUp: item.limitUp,
+      limitRatio: item.limitRatio,
+      boardRule: item.boardRule,
+      gapToLimit: item.gapToLimit,
+      closeStrength: item.closeStrength,
+      amount: item.amount,
+      volRatio: item.volRatio,
+      turnover: item.turnover,
+      floatCap: item.floatCap,
+      geneScore: item.geneScore,
+      nodeLabel: item.nodeLabel || '',
+      nodeScore: item.nodeScore == null ? null : item.nodeScore,
+      nuclearLevel: item.nuclearLevel || 'low',
+      nuclearShort: item.nuclearShort || '',
+      score: item.score,
+      expectationScore: item.expectationScore,
+      statusLabel: item.statusLabel || '尾盘预期 · 未涨停',
+      recommendTime: item.recommendTime || '',
+      lastSeenTime: item.lastSeenTime || '',
+      tags: (item.tags || []).slice(0, 6),
+      reasons: (item.reasons || []).slice(0, 4),
+      risks: (item.risks || []).slice(0, 4),
+      plan: (item.plan || []).slice(0, 4)
+    })
+    dashboard.tailBrief = {
+      status: tail.status,
+      statusLabel: tail.statusLabel,
+      reason: tail.reason,
+      window: tail.window,
+      active: !!tail.active,
+      mode: tail.mode,
+      updatedAt: tail.updatedAt,
+      universe: tail.universe || 0,
+      counts: (tail.counts || []).slice(0, 6),
+      nearMiss: (tail.nearMiss || []).slice(0, 3),
+      items: (tail.items || []).slice(0, 3).map(trimTail)
+    }
+  } catch (err) {
+    dashboard.tailBrief = null
+    warnings.push(`尾盘留痕读取失败：${err.message}`)
+  }
+
   lastGood = dashboard
   lastGoodAt = Date.now()
   persistCache(dashboard)
@@ -797,12 +855,15 @@ const server = http.createServer(async (req, res) => {
           return null
         }
       }
+      const market = marketStatus()
+      const tailSnap = readCache('tail-board.json')
       sendJson(res, 200, {
         ok: true,
         generatedAt: new Date().toISOString(),
-        market: marketStatus(),
+        market,
         diagnostics: readCache('alert-diagnostics.json'),
-        polls: readCache('alert-polls.json')
+        polls: readCache('alert-polls.json'),
+        tail: tailSnap && tailSnap.tradeDate ? tailBoardFromSnapshot(tailSnap.tradeDate, market) : null
       })
       return
     }

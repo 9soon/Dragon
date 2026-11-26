@@ -95,7 +95,9 @@ export const alertState = reactive({
   windowOpen: false,
   windowKey: '',
   funnel: null,
+  tail: null,
   diagnostics: null,
+  diagnosticsTail: null,
   diagnosticsAt: 0,
   lastCheckAt: 0,
   lastError: '',
@@ -439,11 +441,15 @@ function notifyDesktop(alert) {
   }
   try {
     const n = new Notification(
-      `${alert.intraday ? '盘中预警' : '竞价预警'} · ${alert.actionable ? '可执行' : '观察'} · ${alert.name}`,
+      alert.tailSummary
+        ? `尾盘预期 · 明日观察 · ${alert.names.length} 只`
+        : `${alert.intraday ? '盘中预警' : '竞价预警'} · ${alert.actionable ? '可执行' : '观察'} · ${alert.name}`,
       {
-        body: `${alert.sector} · ${alert.statusLabel} · 预警分 ${alert.score}\n${
-          alert.reasons[0] || ''
-        }`,
+        body: alert.tailSummary
+          ? `${alert.names.join('、')}\n只作明日观察，不是隔夜三强，也不是买入指令。`
+          : `${alert.sector} · ${alert.statusLabel} · 预警分 ${alert.score}\n${
+              alert.reasons[0] || ''
+            }`,
         tag: alert.key,
         silent: true
       }
@@ -607,6 +613,7 @@ export function refreshAlertDiagnostics() {
       } else {
         alertState.diagnostics = null
       }
+      alertState.diagnosticsTail = (data && data.tail) || null
       alertState.diagnosticsAt = Date.now()
     } catch (e) {
       /* 留痕读取失败不影响实时预警 */
@@ -617,6 +624,48 @@ export function refreshAlertDiagnostics() {
   return diagPromise
 }
 
+/* 尾盘预期不是个股买入预警：每天最多弹一次 3 只汇总，只作明日观察 */
+function tailSummaryOf(tail, payload) {
+  const at = Date.now()
+  const items = (tail.items || []).filter((x) => x && x.code).slice(0, 3)
+  return {
+    id: `tail:${at}`,
+    key: `tail:${payload.tradeDate || 'live'}`,
+    summary: true,
+    tailSummary: true,
+    at,
+    time: stampOf(at),
+    date: payload.tradeDate || '',
+    dateLabel: shortDate(payload.tradeDate),
+    stageKey: 'tail',
+    stageLabel: '尾盘 14:30–15:00',
+    intraday: true,
+    statusLabel: '尾盘预期 · 明日观察',
+    names: items.map((x) => `${x.name} ${x.score}`),
+    actionableCount: 0,
+    pendingCount: items.length,
+    read: false
+  }
+}
+
+function maybeTailAlert(payload) {
+  const tail = payload && payload.tail
+  if (!tail || !tail.active || tail.status !== 'ready') return
+  if (!Array.isArray(tail.items) || !tail.items.length) return
+  const key = `tail:${payload.tradeDate || 'live'}`
+  if (seenKeys.includes(key)) return
+  if (alertState.centerOpen) return
+  markSeen(key)
+  const summary = tailSummaryOf(tail, payload)
+  if (alertState.current) {
+    alertState.queue.push(summary)
+  } else {
+    alertState.current = summary
+    beep()
+    notifyDesktop(summary)
+  }
+}
+
 export function evaluateAlerts(payload) {
   if (!payload || payload.ok === false) return
   alertState.lastCheckAt = Date.now()
@@ -625,6 +674,7 @@ export function evaluateAlerts(payload) {
   alertState.windowOpen = !!(payload.active && payload.window && payload.window.open)
   alertState.windowKey = payload.window ? payload.window.key || '' : ''
   alertState.funnel = payload.funnel || null
+  alertState.tail = payload.tail || null
   if (!payload.active) return
 
   /* 推荐榜与弹窗分开：即使弹窗关闭，当天推荐记录也能继续保留 */
@@ -656,16 +706,20 @@ export function evaluateAlerts(payload) {
 
   if (!alertState.seeded) {
     alertState.seeded = true
-    if (!fresh.length) return
-    fresh.forEach((item) => addToHistory(item, { silent: true }))
-    const summary = buildSummary(fresh, payload)
-    if (alertState.centerOpen) return
-    if (alertState.current) alertState.queue.push(summary)
-    else alertState.current = summary
+    if (fresh.length) {
+      fresh.forEach((item) => addToHistory(item, { silent: true }))
+      const summary = buildSummary(fresh, payload)
+      if (alertState.centerOpen) return
+      if (alertState.current) alertState.queue.push(summary)
+      else alertState.current = summary
+      return
+    }
+    maybeTailAlert(payload)
     return
   }
 
   fresh.forEach((item) => addToHistory(item))
+  maybeTailAlert(payload)
 }
 
 export function dismissAlert() {

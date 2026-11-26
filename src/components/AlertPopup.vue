@@ -12,14 +12,16 @@ const emit = defineEmits(['close', 'center', 'view', 'catalyst'])
 let timer = null
 
 const isSummary = computed(() => !!(props.alert && props.alert.summary))
+const isTail = computed(() => !!(props.alert && props.alert.tailSummary))
 const actionable = computed(() => !!(props.alert && props.alert.actionable))
 const isIntraday = computed(
   () => !!(props.alert && (props.alert.intraday || props.alert.alertMode === 'intraday'))
 )
-const duration = computed(() => (isSummary.value ? 22000 : 16000))
+const duration = computed(() => (isSummary.value ? 24000 : 16000))
 
 const kickerText = computed(() => {
   if (!props.alert) return ''
+  if (isTail.value) return '尾盘预期 · 明日观察'
   const mode = isIntraday.value ? '盘中' : '竞价'
   if (isSummary.value) return `${mode}预警 · 本轮汇总`
   if (actionable.value) return `${mode}预警 · ${isIntraday.value ? '可执行' : '可挂单'}`
@@ -87,7 +89,8 @@ function onCatalyst() {
         :class="{
           'is-actionable': !isSummary && actionable,
           'is-watch': !isSummary && !actionable,
-          'is-summary': isSummary
+          'is-summary': isSummary,
+          'is-tail': isTail
         }"
         role="status"
         aria-live="polite"
@@ -114,12 +117,19 @@ function onCatalyst() {
         <template v-if="isSummary">
           <div class="alert-summary">
             <div class="alert-summary-main">
-              <b>本轮{{ isIntraday ? '盘中' : '竞价' }}预警 {{ alert.names.length }} 只</b>
-              <p>
+              <b v-if="isTail">尾盘预期 {{ alert.names.length }} 只 · 今日均未涨停</b>
+              <b v-else>本轮{{ isIntraday ? '盘中' : '竞价' }}预警 {{ alert.names.length }} 只</b>
+              <p v-if="isTail">
+                14:30 后按收盘位置、板块共振与基因筛出，最多 3 只；只作明日观察，不是隔夜三强，也不是买入指令。
+              </p>
+              <p v-else>
                 均未{{ isIntraday ? '封板' : '涨停' }}；首次连接只汇总一次，避免一开页就被逐只弹窗淹没，之后新达标的票逐只提醒。
               </p>
             </div>
-            <div class="alert-summary-count">
+            <div v-if="isTail" class="alert-summary-count">
+              <span class="sum sum--watch">明日观察 {{ alert.pendingCount }}</span>
+            </div>
+            <div v-else class="alert-summary-count">
               <span class="sum sum--go">可执行 {{ alert.actionableCount }}</span>
               <span class="sum sum--watch">待核验 {{ alert.pendingCount }}</span>
             </div>
@@ -127,7 +137,11 @@ function onCatalyst() {
           <div class="alert-names">
             <span v-for="name in alert.names" :key="name" class="alert-name">{{ name }}</span>
           </div>
-          <p class="alert-foot-note">
+          <p v-if="isTail" class="alert-foot-note">
+            明日竞价高开 +1% ~ +4%，且同板块至少 1 只核心同步高开，才进入观察；高开 &gt;6% 或低开 &lt;-2% 直接放弃。
+            尾盘强不等于明天必高开，也不是隔夜条件单。
+          </p>
+          <p v-else class="alert-foot-note">
             预警只是条件触发，不是买入指令。均未{{ isIntraday ? '封板' : '涨停' }}；催化未核验或板块三关未过继续按观察处理。
           </p>
           <div class="alert-actions">
@@ -258,6 +272,13 @@ function onCatalyst() {
     linear-gradient(155deg, rgba(17, 22, 32, 0.98), rgba(10, 12, 18, 0.98));
 }
 
+.alert-pop.is-tail {
+  border-color: rgba(243, 199, 119, 0.5);
+  background:
+    radial-gradient(120% 130% at 100% 0%, rgba(243, 199, 119, 0.16), transparent 58%),
+    linear-gradient(155deg, rgba(26, 22, 15, 0.98), rgba(10, 12, 18, 0.98));
+}
+
 .alert-glow {
   position: absolute;
   top: -34px;
@@ -305,6 +326,10 @@ function onCatalyst() {
   color: #a8ccff;
 }
 
+.is-summary.is-tail .alert-kicker {
+  color: #ffe2a9;
+}
+
 .alert-dot {
   width: 6px;
   height: 6px;
@@ -323,6 +348,11 @@ function onCatalyst() {
 .is-summary .alert-dot {
   background: var(--blue);
   box-shadow: 0 0 0 0 rgba(102, 169, 255, 0.5);
+}
+
+.is-summary.is-tail .alert-dot {
+  background: var(--gold);
+  box-shadow: 0 0 0 0 rgba(243, 199, 119, 0.5);
 }
 
 @keyframes alertPulse {

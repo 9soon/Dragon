@@ -63,6 +63,19 @@ const savedPolls = computed(() => {
   return `页面轮询 ${p.count} 次，最近 ${stampText(p.lastAt)}`
 })
 
+/* 收盘后优先读当天尾盘留痕；盘中仍以轮询到的实时尾盘榜为准 */
+const tailBoard = computed(() => {
+  const saved = alertState.diagnosticsTail
+  if (saved && saved.mode === 'closed' && saved.status !== 'live') return saved
+  return alertState.tail || saved || null
+})
+const tailVisible = computed(() => {
+  const t = tailBoard.value
+  if (!t) return false
+  return !['before', 'live'].includes(t.status)
+})
+const tailItems = computed(() => (tailBoard.value && tailBoard.value.items) || [])
+
 watch(
   () => props.open,
   (open) => {
@@ -214,6 +227,68 @@ function verify(item) {
     </div>
 
     <AlertRecommendations compact :live="alertState.windowOpen" />
+
+    <section v-if="tailVisible" class="ac-tail">
+      <div class="ac-tail-head">
+        <span class="section-title">尾盘预期 · 明日观察</span>
+        <span class="chip chip--gold">{{ tailBoard.statusLabel }}</span>
+        <span class="ac-count">
+          {{ tailBoard.window }}
+          <template v-if="tailBoard.updatedAt"> · {{ stampText(tailBoard.updatedAt) }}</template>
+        </span>
+      </div>
+
+      <div v-if="tailItems.length" class="ac-tail-list">
+        <article v-for="(t, idx) in tailItems" :key="t.code" class="ac-tail-row">
+          <div class="ac-tail-line">
+            <b>{{ t.rank || idx + 1 }}. {{ t.name }}</b>
+            <span class="mono">{{ t.code }}</span>
+            <span class="chip chip--gold">{{ t.score }} 预期分</span>
+            <span v-if="t.recommendTime" class="ae-time mono">推荐 {{ t.recommendTime }}</span>
+          </div>
+          <div class="ac-tail-meta">
+            <span class="mono" :class="pctTone(t.pct)">{{ fmtPct(t.pct) }}</span>
+            <span>距涨停 {{ fmtPct(t.gapToLimit, { sign: false }) }}</span>
+            <span>收盘位置 {{ t.closeStrength == null ? '--' : t.closeStrength + '%' }}</span>
+            <span>基因 {{ t.geneScore }}</span>
+            <span v-if="t.volRatio != null">量比 {{ fmtNum(t.volRatio, 2) }}</span>
+          </div>
+          <p class="ac-tail-why">
+            {{ t.sector }}<template v-if="t.reasons && t.reasons.length"> · {{ t.reasons[0] }}</template>
+          </p>
+          <p v-if="t.risks && t.risks.length" class="ac-tail-risk">! {{ t.risks[0] }}</p>
+          <p class="ac-tail-plan">
+            观察：{{ (t.plan && t.plan[0]) || '竞价不及预期直接放弃' }}
+          </p>
+        </article>
+      </div>
+
+      <div v-else class="ac-funnel-empty">{{ tailBoard.reason }}</div>
+
+      <div
+        v-if="!tailItems.length && tailBoard.counts && tailBoard.counts.length"
+        class="ac-funnel-counts"
+      >
+        <span v-for="c in tailBoard.counts" :key="c.reason">{{ c.reason }} {{ c.count }}</span>
+      </div>
+
+      <div
+        v-if="!tailItems.length && tailBoard.nearMiss && tailBoard.nearMiss.length"
+        class="ac-funnel-near"
+      >
+        <div v-for="n in tailBoard.nearMiss" :key="n.code" class="ac-funnel-row">
+          <b>{{ n.name }}</b>
+          <span v-if="n.pct != null" class="mono">{{ n.pct > 0 ? '+' : '' }}{{ n.pct }}%</span>
+          <span class="mono">预期分 {{ n.score }}</span>
+          <em>{{ n.reason }}</em>
+        </div>
+      </div>
+
+      <p class="ac-tail-note">
+        尾盘预期只在 14:30–15:00 计算，最多 3 只；只作明日观察，不是隔夜三强，不进入条件单草稿。
+        没有同时满足条件的票就空着，不为凑数放宽。
+      </p>
+    </section>
 
     <div
       v-if="alertState.funnel && (alertState.funnel.candidates || alertState.windowOpen)"
@@ -382,6 +457,7 @@ function verify(item) {
         <li>三板组核按钮高风险直接不提醒：小盘冷门票一字 / T 字缩量加速到 3–4 板、封单极大、无板块主线，常在竞价撤单砸盘；缩量加速的中风险票会降权并标注“防核按钮”。</li>
         <li>推荐榜按预警分从强到弱最多 3 只；每轮最多弹预警分最高的 1 只，不批量轰炸。</li>
         <li>竞价预警分 = 基因 50% + 竞价强度 30% + 板块 12% + 昨日涨停池 8%；盘中预警分 = 基因 45% + 近板强度 25% + 量比 15% + 板块 10% + 昨日涨停池 5%，都与榜单综合分不是同一口径。</li>
+        <li>尾盘预期只在 14:30–15:00 计算：今天没涨停、距涨停 &gt;0.5 点、收盘位置 ≥60%、基因 ≥68、板块共振，最多 3 只；只作明日观察，不进入隔夜三强或条件单草稿，每天最多弹一次汇总。</li>
         <li>推荐与预警时间保存在浏览器本地，刷新页面不会清空；清空记录会同时删除当日推荐历史，需要二次确认。</li>
         <li>同一代码每天最多弹一次；首次连接只汇总一次，之后新达标逐只弹窗。9:15–9:20 试撮不触发。</li>
         <li>纯传闻不提醒；催化未核验或板块三关未过只算观察预警，不解除观察。预警不是买入指令，封板后只排队观察。</li>
@@ -599,6 +675,102 @@ function verify(item) {
 }
 
 .ac-funnel-note {
+  margin: 7px 0 0;
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+
+.ac-tail {
+  margin: 10px 0 12px;
+  padding: 10px 11px;
+  border: 1px solid rgba(243, 199, 119, 0.22);
+  border-radius: 12px;
+  background:
+    radial-gradient(100% 120% at 100% 0%, rgba(243, 199, 119, 0.07), transparent 62%),
+    rgba(255, 255, 255, 0.022);
+}
+
+.ac-tail-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ac-tail-head .section-title {
+  font-size: 12.5px;
+}
+
+.ac-tail-head .ac-count {
+  margin-left: auto;
+}
+
+.ac-tail-list {
+  margin-top: 7px;
+  display: grid;
+  gap: 6px;
+}
+
+.ac-tail-row {
+  padding: 7px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.ac-tail-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ac-tail-line b {
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+
+.ac-tail-line .mono {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.ac-tail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.ac-tail-why {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+.ac-tail-risk {
+  margin: 3px 0 0;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 111, 97, 0.18);
+  background: rgba(255, 111, 97, 0.05);
+  font-size: 10px;
+  line-height: 1.5;
+  color: #ffb4ac;
+}
+
+.ac-tail-plan {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--gold);
+}
+
+.ac-tail-note {
   margin: 7px 0 0;
   font-size: 10px;
   line-height: 1.55;

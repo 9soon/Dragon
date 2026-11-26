@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import MarketMood from '../components/MarketMood.vue'
-import { fmtMoney, fmtPct, fmtPrice } from '../lib/format'
+import { fmtMoney, fmtNum, fmtPct, fmtPrice, pctTone } from '../lib/format'
 import { getRecAudit } from '../lib/api'
 
 const props = defineProps({
@@ -70,6 +70,17 @@ const overnightModeLabel = computed(
       locked: '盘前不追加'
     })[overnightModeKey.value] || '隔夜计划'
 )
+const tailBrief = computed(() => props.dashboard.tailBrief || null)
+const tailTop = computed(() => ((tailBrief.value && tailBrief.value.items) || []).slice(0, 3))
+const tailVisible = computed(
+  () => !!(tailBrief.value && tailBrief.value.mode !== 'before')
+)
+const tailTone = computed(() => {
+  const status = tailBrief.value ? tailBrief.value.status : ''
+  if (status === 'closed' || status === 'ready') return 'chip--gold'
+  if (status === 'empty') return 'chip--warn'
+  return 'chip--dim'
+})
 const recAudit = ref(null)
 const recLoading = ref(false)
 const recError = ref('')
@@ -395,6 +406,68 @@ function tierTone(v) {
             当前是「{{ overnightModeLabel }}」，只作预演，不能作为挂单依据；15:00 后重算才可能定稿。
           </template>
           今日一字 / 秒板不进三强；跳空、滑点与停牌都可能让计划失效。
+        </p>
+      </div>
+    </section>
+
+    <section v-if="tailVisible" class="section tail-review-section">
+      <header class="section-head">
+        <span class="section-title">尾盘预期</span>
+        <span class="section-count">14:30–15:00 · 最多 3 只 · 明日观察</span>
+      </header>
+
+      <div class="panel tail-review-panel">
+        <div class="night-head">
+          <span class="chip" :class="tailTone">{{ tailBrief.statusLabel }}</span>
+          <p>{{ tailBrief.reason }}</p>
+        </div>
+
+        <div v-if="tailTop.length" class="night-list">
+          <article v-for="(t, i) in tailTop" :key="t.code" class="night-row">
+            <span class="night-rank">{{ t.rank || i + 1 }}</span>
+            <div class="night-body">
+              <div class="night-name">
+                <b>{{ t.name }}</b>
+                <span class="mono">{{ t.code }}</span>
+                <span class="chip chip--gold">未涨停</span>
+                <span class="night-sector">{{ t.sector }}</span>
+              </div>
+              <div class="night-meta">
+                <span>预期分 <b>{{ t.score }}</b></span>
+                <span :class="pctTone(t.pct)">{{ fmtPct(t.pct) }}</span>
+                <span>距涨停 {{ fmtPct(t.gapToLimit, { sign: false }) }}</span>
+                <span>收盘位置 {{ t.closeStrength == null ? '--' : t.closeStrength + '%' }}</span>
+                <span v-if="t.volRatio != null">量比 {{ fmtNum(t.volRatio, 2) }}</span>
+                <span v-if="t.recommendTime">推荐 {{ t.recommendTime }}</span>
+              </div>
+              <div class="night-tags">
+                <span v-for="tag in nightTags(t)" :key="tag" class="tag">{{ tag }}</span>
+              </div>
+              <p v-if="t.reasons && t.reasons.length" class="night-why">{{ t.reasons[0] }}</p>
+              <p v-if="t.risks && t.risks.length" class="night-risk">! {{ t.risks[0] }}</p>
+              <p v-if="t.plan && t.plan.length" class="tail-review-plan">
+                观察：{{ t.plan[0] }}
+              </p>
+            </div>
+          </article>
+        </div>
+
+        <div v-else class="night-empty">
+          <b>
+            {{ tailBrief.status === 'none' ? '当天没有留痕' : tailBrief.status === 'empty' ? '今天没有合格票' : '今天不凑数' }}
+          </b>
+          <p class="dim">
+            {{
+              tailBrief.mode === 'live'
+                ? '实时尾盘榜在「竞价 / 盘中」页；这里只展示已落盘的留痕。'
+                : '只筛今天没涨停、收盘位置强且板块共振的票；没有就空着，不把尾盘预期混进隔夜三强。'
+            }}
+          </p>
+        </div>
+
+        <p class="night-note tail-review-note">
+          尾盘预期与隔夜三强分开：它不要求今日封板，也不进入条件单草稿。明日竞价高开 +1%–4%
+          且同板块至少 1 只核心同步才观察；高开 &gt;6% 或低开 &lt;-2% 直接放弃。
         </p>
       </div>
     </section>
@@ -2559,6 +2632,30 @@ function tierTone(v) {
   font-size: 10px;
   line-height: 1.7;
   color: var(--dim);
+}
+
+/* ---------- 尾盘预期 ---------- */
+
+.tail-review-section .section-title {
+  color: var(--gold);
+}
+
+.tail-review-panel {
+  border-color: rgba(243, 199, 119, 0.18);
+  background:
+    radial-gradient(110% 120% at 100% 0%, rgba(243, 199, 119, 0.06), transparent 60%),
+    rgba(255, 255, 255, 0.02);
+}
+
+.tail-review-plan {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--gold);
+}
+
+.tail-review-note {
+  color: rgba(243, 199, 119, 0.55);
 }
 
 @media (max-width: 370px) {
