@@ -230,7 +230,7 @@ function verify(item) {
 
     <section v-if="tailVisible" class="ac-tail">
       <div class="ac-tail-head">
-        <span class="section-title">尾盘预期 · 明日观察</span>
+        <span class="section-title">尾盘超预期 · 明日观察</span>
         <span class="chip chip--gold">{{ tailBoard.statusLabel }}</span>
         <span class="ac-count">
           {{ tailBoard.window }}
@@ -248,8 +248,10 @@ function verify(item) {
           </div>
           <div class="ac-tail-meta">
             <span class="mono" :class="pctTone(t.pct)">{{ fmtPct(t.pct) }}</span>
+            <span v-if="t.openPct != null">开盘 {{ fmtPct(t.openPct) }} · {{ t.openLabel }}</span>
             <span>距涨停 {{ fmtPct(t.gapToLimit, { sign: false }) }}</span>
             <span>收盘位置 {{ t.closeStrength == null ? '--' : t.closeStrength + '%' }}</span>
+            <span v-if="t.sectorSealCount">板块核心 {{ t.sectorSealCount }} 只</span>
             <span>基因 {{ t.geneScore }}</span>
             <span v-if="t.volRatio != null">量比 {{ fmtNum(t.volRatio, 2) }}</span>
           </div>
@@ -285,8 +287,8 @@ function verify(item) {
       </div>
 
       <p class="ac-tail-note">
-        尾盘预期只在 14:30–15:00 计算，最多 3 只；只作明日观察，不是隔夜三强，不进入条件单草稿。
-        没有同时满足条件的票就空着，不为凑数放宽。
+        尾盘超预期只在 14:30–15:00 计算，最多 3 只；只从中低位活跃股里筛没涨停、收盘走强、板块有涨停核心的票，贴板 / 高位连板 / 涨停池炸板票直接剔除。
+        只作明日观察，不是隔夜三强，不进入条件单草稿；没有同时满足条件的票就空着，不为凑数放宽。
       </p>
     </section>
 
@@ -457,7 +459,7 @@ function verify(item) {
         <li>三板组核按钮高风险直接不提醒：小盘冷门票一字 / T 字缩量加速到 3–4 板、封单极大、无板块主线，常在竞价撤单砸盘；缩量加速的中风险票会降权并标注“防核按钮”。</li>
         <li>推荐榜按预警分从强到弱最多 3 只；每轮最多弹预警分最高的 1 只，不批量轰炸。</li>
         <li>竞价预警分 = 基因 50% + 竞价强度 30% + 板块 12% + 昨日涨停池 8%；盘中预警分 = 基因 45% + 近板强度 25% + 量比 15% + 板块 10% + 昨日涨停池 5%，都与榜单综合分不是同一口径。</li>
-        <li>尾盘预期只在 14:30–15:00 计算：今天没涨停、距涨停 &gt;0.5 点、收盘位置 ≥60%、基因 ≥68、板块共振，最多 3 只；只作明日观察，不进入隔夜三强或条件单草稿，每天最多弹一次汇总。</li>
+        <li>尾盘超预期只在 14:30–15:00 计算：只从中低位活跃股里筛今天没涨停、涨幅 0.5%–6.5%、距涨停 ≥3 点、收盘位置 ≥65%、成交 ≥5000 万、换手 ≤25%、板块有涨停核心的票，最多 3 只；贴板 / 高位连板 / 涨停池炸板票直接剔除，只作明日观察，不进入隔夜三强或条件单草稿，每天最多弹一次汇总。</li>
         <li>推荐与预警时间保存在浏览器本地，刷新页面不会清空；清空记录会同时删除当日推荐历史，需要二次确认。</li>
         <li>同一代码每天最多弹一次；首次连接只汇总一次，之后新达标逐只弹窗。9:15–9:20 试撮不触发。</li>
         <li>纯传闻不提醒；催化未核验或板块三关未过只算观察预警，不解除观察。预警不是买入指令，封板后只排队观察。</li>

@@ -228,6 +228,45 @@ async function scanMarketLeaders(limit = 80) {
   })
 }
 
+/**
+ * 尾盘“明日超预期”专用扫描：只在中低位找今天没涨停、但日内走强且板块有涨停核心的票。
+ * 不能沿用涨幅榜（那天然是高位），这里按成交额 + 换手率各取一批活跃股，再去重过滤。
+ * 只做尾盘扫描，不并入竞价 / 盘中预警主榜。
+ */
+async function scanTailSurprises(limit = 120) {
+  const size = Math.max(40, Math.min(150, Number(limit) || 120))
+  return cached(`scan:tail-surprises:${size}`, 25000, async () => {
+    const buildUrl = (fid) =>
+      `https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=${size}&po=1&np=1` +
+      `&ut=${UT_QUOTE}&fltt=2&invt=2&fid=${fid}` +
+      `&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23` +
+      `&fields=${QUOTE_FIELDS}&_=${Date.now()}`
+    const [amountRes, turnoverRes] = await Promise.allSettled([
+      emFetch(buildUrl('f6'), { timeout: 10000 }),
+      emFetch(buildUrl('f8'), { timeout: 10000 })
+    ])
+    const seen = new Set()
+    const items = []
+    for (const res of [amountRes, turnoverRes]) {
+      if (res.status !== 'fulfilled') continue
+      const diff = res.value && res.value.data && res.value.data.diff
+      if (!Array.isArray(diff)) continue
+      for (const d of diff) {
+        const q = normalizeQuote(d)
+        if (!q || !q.code || seen.has(q.code)) continue
+        if (!/^\d{6}$/.test(q.code)) continue
+        if (/ST|退/i.test(q.name || '')) continue
+        /* 先宽后严：这里只做初级过滤，最终门槛在 edge 的尾盘超预期规则里 */
+        if (q.pct == null || q.pct < 0.3 || q.pct > 7) continue
+        if (q.amount != null && q.amount < 2e7) continue
+        seen.add(q.code)
+        items.push({ ...q, tailSource: true })
+      }
+    }
+    return { items, at: Date.now() }
+  })
+}
+
 async function fetchBoardPage(page) {
   const url =
     `https://push2.eastmoney.com/api/qt/clist/get?pn=${page}&pz=500&po=1&np=1` +
@@ -1015,6 +1054,7 @@ module.exports = {
   getBoards,
   getBoardQuotes,
   scanMarketLeaders,
+  scanTailSurprises,
   batchQuotes,
   tencentQuotes,
   getTodayFlow,

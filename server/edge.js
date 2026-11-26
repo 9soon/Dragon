@@ -9,6 +9,7 @@ const {
   getPrevTradingPool,
   batchQuotes,
   scanMarketLeaders,
+  scanTailSurprises,
   tencentKline
 } = require('./eastmoney')
 const { sealMinutesFromOpen, sealTimeLabel } = require('./scoring')
@@ -2806,6 +2807,52 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     }
   }
 
+  /* 尾盘超预期：涨幅榜天然偏高，14:30 后额外按成交额 / 换手找中低位活跃股。
+   * 这批票只进尾盘规则，不进入 top / 预警榜 / 隔夜计划。 */
+  if (tailTimeState(market, stage).active) {
+    try {
+      const tailScan = await scanTailSurprises(120)
+      for (const q of tailScan.items || []) {
+        if (!q.code || map.has(q.code)) continue
+        if (!/^\d{6}$/.test(q.code)) continue
+        if (is20cmCode(q.code)) continue
+        const industry = q.industry || ''
+        const sector = matchSectorLoose(industry)
+        map.set(q.code, {
+          code: q.code,
+          secid: q.secid || `${/^6/.test(q.code) ? 1 : 0}.${q.code}`,
+          name: q.name || q.code,
+          industry,
+          sector: sector ? sector.name : industry || '未分类',
+          sectorKey: sector ? sector.key : null,
+          lbc: 0,
+          price: q.price,
+          turnover: q.turnover,
+          amount: q.amount,
+          prevAmount: null,
+          floatCap: q.floatCap,
+          sealRatio: 0,
+          sealFund: 0,
+          firstSeal: 0,
+          firstSealLabel: '--:--',
+          blowCount: 0,
+          ztDays: 0,
+          fromPool: false,
+          scanned: true,
+          tailScan: true,
+          sectorRef: sector,
+          sectorHeat: sector ? sector.heat : null,
+          sectorGroup: sector ? sector.group : null,
+          sectorReady: !!(sector && sector.dataReady),
+          sectorTodayCount: sector ? sector.todayCount : null,
+          sectorPrevCount: sector ? sector.prevCount : null
+        })
+      }
+    } catch (err) {
+      /* 尾盘附加扫描失败时仍保留原有强势池，不让尾盘榜单中断 */
+    }
+  }
+
   /* 盘中 / 竞价定稿需要涨停价与买一量，腾讯五档随批次合并；其它阶段用轻量行情 */
   const needSeal = !!stage.intraday || stage.key === 'final'
   const list = Array.from(map.values())
@@ -3073,6 +3120,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
       lbc: c.lbc,
       fromPool: c.fromPool,
       scanned: !!c.scanned,
+      tailScan: !!c.tailScan,
       price: c.price,
       open: c.open,
       high: c.high,
@@ -3138,7 +3186,8 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   strong.sort(
     (a, b) => b.score - a.score || (b.nodeScore || 0) - (a.nodeScore || 0)
   )
-  const top = strong
+  const primaryStrong = strong.filter((x) => !x.tailScan)
+  const top = primaryStrong
     .filter((x) => x.status !== 'drop')
     .slice(0, 5)
     .map((x, i) => ({ ...x, rank: i + 1 }))
@@ -3146,8 +3195,8 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   const watchCount = top.filter((x) => x.status === 'watch').length
   const tradeDate = latest ? latest.date : dashboard.tradeDate
   /* 预警榜不看综合分前五：只看“未封板、还能买”的合格票，按预警分从强到弱 */
-  const alertBoard = buildAlertBoard(strong, { stage, tradeDate, now })
-  const alertFunnel = buildAlertFunnel(strong, alertBoard, { stage })
+  const alertBoard = buildAlertBoard(primaryStrong, { stage, tradeDate, now })
+  const alertFunnel = buildAlertFunnel(primaryStrong, alertBoard, { stage })
   const tailBoard = buildTailBoard(strong, { market, stage, tradeDate, now })
   const alertBoardReady =
     ['locked', 'final', 'intraday'].includes(stage.key) && !stage.frozen
@@ -3180,14 +3229,14 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   if (stage.key === 'trial') notes.push('试撮阶段的数据会撤单、重挂，任何结论都必须等到 9:20 之后复核。')
   if (stage.key === 'final') notes.push('竞价定稿后仍需看 9:30 后是否放量承接；高开低走按失败处理。')
   notes.push(
-    '尾盘预期只在 14:30–15:00 计算：只筛今天没涨停、收盘位置强、板块共振的票，最多 3 只；它不是隔夜三强，也不进入条件单草稿。'
+    '尾盘超预期只在 14:30–15:00 计算：只筛今天没涨停、仍在低位/中位、收盘走强、板块有涨停核心的票，最多 3 只；它不是隔夜三强，也不进入条件单草稿。'
   )
   if (tailBoard.status === 'ready') {
     notes.push(
-      `尾盘预期 ${tailBoard.items.length} 只：${tailBoard.items.map((x) => x.name).join('、')}；仅作明日观察，竞价不及预期直接放弃。`
+      `尾盘超预期 ${tailBoard.items.length} 只：${tailBoard.items.map((x) => x.name).join('、')}；仅作明日观察，竞价不及预期直接放弃。`
     )
   } else if (tailBoard.status === 'empty') {
-    notes.push('尾盘预期为空：没有同时满足未涨停、基因、收盘位置与板块共振的票，不为凑数放宽。')
+    notes.push('尾盘超预期为空：没有同时满足中低位、未涨停、收盘强、板块有涨停核心的票，不为凑数放宽。')
   }
   notes.push('本榜与预警剔除科创板 688/689、创业板 300/301 的 20cm 标的；20cm 不进入推荐，也不弹窗。')
   notes.push(
@@ -3256,19 +3305,21 @@ const ALERT_HIGH_MIN_GENE = 70
 const ALERT_HIGH_MAX_PCT = 7
 const ALERT_HIGH_MIN_AMOUNT_RATIO = 3
 
-/* 尾盘预期：14:30–15:00 专看“今天没涨停、但明天有观察价值”的票。
- * 与隔夜三强分开：三强只从今日涨停的连板核心里选，尾盘预期不要求今日封板。
+/* 尾盘超预期：14:30–15:00 专看“今天没涨停、位置不高、但明天有预期差”的票。
+ * 与隔夜三强分开：三强只从今日涨停的连板核心里选，尾盘超预期不要求今日封板。
  * 这里没有权威历史快照，无法承诺胜率；只做规则筛选与条件观察。 */
 const TAIL_START_MIN = 14 * 60 + 30
 const TAIL_END_MIN = 15 * 60
 const TAIL_BOARD_SIZE = 3
-const TAIL_MIN_GENE = 68
-const TAIL_MIN_PCT = 3
-const TAIL_MAX_PCT = 9.4
-const TAIL_MIN_GAP = 0.5
-const TAIL_MIN_AMOUNT = 3e7
-const TAIL_MIN_CLOSE_STRENGTH = 60
-const TAIL_SCORE_THRESHOLD = 68
+const TAIL_MIN_GENE = 35
+const TAIL_MIN_PCT = 0.5
+const TAIL_MAX_PCT = 6.5
+const TAIL_MIN_GAP = 3
+const TAIL_MAX_TURNOVER = 25
+const TAIL_MAX_VOL_RATIO = 5
+const TAIL_MIN_AMOUNT = 5e7
+const TAIL_MIN_CLOSE_STRENGTH = 65
+const TAIL_SCORE_THRESHOLD = 60
 const TAIL_FILE = path.join(__dirname, '..', '.cache', 'tail-board.json')
 const TAIL_FIRST_SEEN = new Map()
 let tailFirstSeenDate = ''
@@ -3368,7 +3419,7 @@ function alertFirstSeenOf(tradeDate, code, now) {
   return hit
 }
 
-/* ---------------- 尾盘预期（14:30–15:00） ---------------- */
+/* ---------------- 尾盘超预期（14:30–15:00） ---------------- */
 
 function tailFirstSeenOf(tradeDate, code, now) {
   if (tradeDate && tailFirstSeenDate !== tradeDate) {
@@ -3410,8 +3461,8 @@ function tailTimeState(market, stage) {
     return {
       key: 'live',
       active: true,
-      label: '尾盘计算中',
-      note: '14:30–15:00 只筛今天没涨停、仍收在日内高位且板块有共振的票；不是今日追买指令。'
+      label: '尾盘超预期计算中',
+      note: '14:30–15:00 只筛今天没涨停、仍在低位/中位、收盘走强且板块有涨停核心的票；不追已接近涨停的高位股。'
     }
   }
   if (key === 'afternoon' && mins < TAIL_START_MIN) {
@@ -3420,14 +3471,14 @@ function tailTimeState(market, stage) {
       key: 'before',
       active: false,
       label: '14:30 后计算',
-      note: `还差约 ${left} 分钟。尾盘预期不提前猜，只等 14:30 后看收盘位置、量比与板块共振。`
+      note: `还差约 ${left} 分钟。尾盘超预期不提前猜，只等 14:30 后看中低位活跃股的收盘位置、开盘强弱与板块核心。`
     }
   }
   return {
     key: 'before',
     active: false,
     label: '尾盘窗口未到',
-    note: '尾盘预期只在交易日 14:30–15:00 计算；盘前、午间与休市都不生成，避免把旧数据当明天预期。'
+    note: '尾盘超预期只在交易日 14:30–15:00 计算；盘前、午间与休市都不生成，避免把旧数据当明天预期。'
   }
 }
 
@@ -3439,81 +3490,175 @@ function tailCloseStrength(x) {
   return Math.round(clamp(((price - low) / (high - low)) * 100, 0, 100))
 }
 
-function tailNearLimitPart(gap) {
-  return clamp(100 - Math.max(0, num(gap, 10)) * 12, 0, 100)
+/* 中低位票不奖励“贴板”，反而要求离涨停有足够空间；涨幅 1%–4.5% 最舒服 */
+function tailPositionPart(pct) {
+  const v = num(pct, 0)
+  if (v < 1) return 60
+  if (v <= 4.5) return 100
+  if (v <= 5.5) return 82
+  return 62
+}
+
+function tailRoomPart(gap) {
+  return clamp((num(gap, 0) - TAIL_MIN_GAP) * 20, 0, 100)
+}
+
+/* 开盘越弱、现在越强，明天的预期差越大；高开高走只算“跟随”，不算超预期 */
+function tailOpenProfile(x) {
+  const open = num(x && x.open, null)
+  const prev = num(x && x.prevClose, null)
+  const price = num(x && x.price, null)
+  if (open == null || prev == null || prev <= 0 || price == null) {
+    return { part: 50, openPct: null, gainFromOpen: null, label: '开盘信息缺失' }
+  }
+  const openPct = ((open - prev) / prev) * 100
+  const gainFromOpen = ((price - open) / open) * 100
+  let part
+  if (openPct <= -1) part = 100
+  else if (openPct <= 0.5) part = 86
+  else if (openPct <= 1.5) part = 72
+  else if (openPct <= 3) part = 58
+  else part = 42
+  part = clamp(part + clamp(gainFromOpen * 4, -15, 15), 0, 100)
+  const label =
+    openPct <= -1 && gainFromOpen >= 2
+      ? '低开高走'
+      : openPct <= 0.5 && gainFromOpen >= 1.5
+        ? '平开走强'
+        : '日内走强'
+  return {
+    part,
+    openPct: round(openPct, 2),
+    gainFromOpen: round(gainFromOpen, 2),
+    label
+  }
 }
 
 function tailVolumePart(x) {
-  if (x && x.volRatio != null) return clamp(num(x.volRatio, 0) * 35, 0, 100)
-  if (x && x.amount != null) return clamp((num(x.amount, 0) / 5e8) * 100, 0, 100)
-  return 50
+  const vr = x && x.volRatio != null ? num(x.volRatio, 0) : null
+  const turnover = x && x.turnover != null ? num(x.turnover, 0) : null
+  let volScore = 55
+  if (vr != null) {
+    if (vr >= 1.2 && vr <= 2.8) volScore = 100
+    else if (vr < 1) volScore = 30
+    else if (vr <= 4) volScore = 70
+    else volScore = 35
+  }
+  let turnoverScore = 55
+  if (turnover != null) {
+    if (turnover >= 3 && turnover <= 15) turnoverScore = 100
+    else if (turnover < 3) turnoverScore = 40
+    else if (turnover <= 20) turnoverScore = 72
+    else if (turnover <= TAIL_MAX_TURNOVER) turnoverScore = 45
+    else turnoverScore = 10
+  }
+  return volScore * 0.55 + turnoverScore * 0.45
 }
 
-/* 尾盘预期分 = 基因 35% + 收盘位置 20% + 近板 15% + 板块 15% + 量能 10% + 节点 5%
- * 这是规则权重，不是回测出来的胜率；分数只用于同层排序。 */
-function tailExpectationScore(x) {
-  const gene = num(x && x.geneScore, 0)
-  const closeStrength = tailCloseStrength(x)
-  const near = tailNearLimitPart(x && x.gapToLimit)
-  const sector = auctionAlertSectorPart(x || {})
+/* 板块有涨停核心，个股还在中低位，才叫“补涨预期差”；没有核心就是孤军 */
+function tailSectorPart(x, sectorSealCount = 0) {
+  const seals = num(sectorSealCount, 0)
+  const today = num(x && x.sectorTodayCount, 0)
+  if (seals >= 2) return 100
+  if (seals >= 1) return 92
+  if (x && x.sectorReady) return 82
+  if (today >= 5) return 72
+  if (today >= 3) return 60
+  return 20
+}
+
+/* 尾盘超预期分 = 位置 14% + 空间 8% + 收盘 22% + 开盘强弱 20% + 板块 17% + 量能 10% + 基因 5% + 节点 4%
+ * 仓位权重刻意不奖励“贴涨停”：贴板在硬门槛已剔除。分数只用于同层排序，不是胜率。 */
+function tailExpectationScore(x, ctx = {}) {
+  const pct = num(x && x.pct, 0)
+  const gap = num(x && x.gapToLimit, 10)
+  const pos = tailPositionPart(pct)
+  const room = tailRoomPart(gap)
+  const close = tailCloseStrength(x)
+  const open = tailOpenProfile(x)
+  const sector = tailSectorPart(x || {}, ctx.sectorSealCount || 0)
   const volume = tailVolumePart(x)
+  const gene = clamp(num(x && x.geneScore, 50), 0, 100)
   const node = clamp(num(x && x.nodeScore, 50), 0, 100)
-  const penalty = x && x.nuclearLevel === 'mid' ? 3 : 0
+  const penalty = x && x.nuclearLevel === 'mid' ? 4 : 0
   return Math.round(
     clamp(
-      gene * 0.35 + closeStrength * 0.2 + near * 0.15 + sector * 0.15 + volume * 0.1 + node * 0.05,
+      pos * 0.14 +
+        room * 0.08 +
+        close * 0.22 +
+        open.part * 0.2 +
+        sector * 0.17 +
+        volume * 0.1 +
+        gene * 0.05 +
+        node * 0.04,
       0,
       100
     ) - penalty
   )
 }
 
-function tailRejectReason(x) {
+function tailRejectReason(x, ctx = {}) {
   if (!x || !x.code) return '无代码'
   if (is20cmCode(x.code)) return '双创 20cm'
-  if (x.status !== 'watch' && x.status !== 'confirm') return '未入盘中强势候选'
+  if (!x.tailScan && x.status !== 'watch' && x.status !== 'confirm') return '未入尾盘超预期池'
   if (x.sealed) return '已涨停 / 买不进'
-  /* 今日涨停池里的开板 / 炸板票不进尾盘预期：今天已经证明封不住，明天先按风险处理 */
+  /* 今日涨停池里的开板 / 炸板票不进尾盘超预期：今天已经证明封不住，明天先按风险处理 */
   if (x.fromPool) return '今日涨停池开板 / 炸板'
   if (x.gapToLimit == null) return '距涨停未知'
-  if (num(x.gapToLimit, 0) <= TAIL_MIN_GAP) {
-    return `距涨停 ${num(x.gapToLimit, 0)} 点，接近封板`
+  if (num(x.gapToLimit, 0) < TAIL_MIN_GAP) {
+    return `距涨停 ${num(x.gapToLimit, 0)} 点 < ${TAIL_MIN_GAP}，位置偏高`
   }
   const pct = num(x.pct, null)
   if (pct == null) return '涨幅缺失'
   if (pct < TAIL_MIN_PCT) return `涨幅 ${round(pct, 2)}% 低于 ${TAIL_MIN_PCT}%`
   if (pct > TAIL_MAX_PCT) return `涨幅 ${round(pct, 2)}% 高于 ${TAIL_MAX_PCT}%`
+  if (num(x.lbc, 0) > 2) return `昨日 ${x.lbc} 板，位置偏高`
+  if (x.nuclearLevel === 'high') return '核按钮高风险'
+  const sectorSeals = num(ctx.sectorSealCount, 0)
+  if (!x.sectorReady && sectorSeals < 1 && num(x.sectorTodayCount, 0) < 3) {
+    return '板块无涨停核心'
+  }
+  if (x.amount != null && num(x.amount, 0) < TAIL_MIN_AMOUNT) {
+    return `成交额 ${amountText(x.amount)} < 5000 万`
+  }
+  if (x.turnover != null && num(x.turnover, 0) > TAIL_MAX_TURNOVER) {
+    return `换手 ${round(num(x.turnover, 0), 1)}% 过热`
+  }
+  if (x.turnover != null && num(x.turnover, 0) < 2) {
+    return `换手 ${round(num(x.turnover, 0), 1)}% 过低`
+  }
+  if (x.volRatio != null && num(x.volRatio, 0) < 0.9) {
+    return `量比 ${round(num(x.volRatio, 0), 2)} <0.9`
+  }
+  if (x.volRatio != null && num(x.volRatio, 0) > TAIL_MAX_VOL_RATIO) {
+    return `量比 ${round(num(x.volRatio, 0), 2)} >${TAIL_MAX_VOL_RATIO}，已拥挤`
+  }
   if (num(x.geneScore, 0) < TAIL_MIN_GENE) {
     return `基因 ${Math.round(num(x.geneScore, 0))} < ${TAIL_MIN_GENE}`
-  }
-  if (x.nuclearLevel === 'high') return '核按钮高风险'
-  if (!x.sectorReady && num(x.sectorTodayCount, 0) < 5) return '板块未过三关且涨停 <5 家'
-  if (x.amount != null && num(x.amount, 0) < TAIL_MIN_AMOUNT) {
-    return `成交额 ${amountText(x.amount)} < 3000 万`
-  }
-  if (x.volRatio != null && num(x.volRatio, 0) < 1) {
-    return `量比 ${round(num(x.volRatio, 0), 2)} <1.0`
   }
   const strength = tailCloseStrength(x)
   if (strength < TAIL_MIN_CLOSE_STRENGTH) {
     return `收盘仅在日内 ${strength}% 位置，尾盘不强`
   }
-  if (num(x.lbc, 0) >= 5) return '高位断板风险'
   return null
 }
 
 function tailRejectGroup(reason) {
   if (!reason) return ''
-  if (reason.startsWith('涨幅') && reason.includes('低于')) return '涨幅低于 3%'
-  if (reason.startsWith('涨幅') && reason.includes('高于')) return '涨幅高于 9.4% / 接近涨停'
-  if (reason.startsWith('距涨停')) return '距涨停太近 / 接近封板'
+  if (reason.startsWith('涨幅') && reason.includes('低于')) return '涨幅低于 0.5%'
+  if (reason.startsWith('涨幅') && reason.includes('高于')) return '涨幅高于 6.5% / 位置偏高'
+  if (reason.startsWith('距涨停')) return '距涨停太近 / 位置偏高'
   if (reason.startsWith('基因')) return '基因不足'
-  if (reason.includes('板块')) return '板块未共振'
+  if (reason.includes('板块')) return '板块无涨停核心'
   if (reason.startsWith('成交额')) return '成交额不足'
-  if (reason.startsWith('量比')) return '量比不足'
+  if (reason.startsWith('换手')) return '换手过热 / 过低'
+  if (reason.startsWith('量比')) {
+    return reason.includes('拥挤') ? '量比过热 / 已拥挤' : '量比不足'
+  }
   if (reason.startsWith('收盘仅在日内')) return '尾盘收盘位置不强'
   if (reason.includes('涨停池')) return '今日炸板 / 开板'
-  if (reason.startsWith('尾盘预期分')) return '尾盘预期分不足'
+  if (reason.startsWith('昨夜') || reason.startsWith('昨日')) return '昨日连板，位置偏高'
+  if (reason.startsWith('超预期分')) return '预期分不足'
   return reason
 }
 
@@ -3522,7 +3667,7 @@ function tailBoardFromSnapshot(tradeDate, market) {
   const snap = readTailSnapshot(tradeDate)
   const base = {
     key: 'tail',
-    label: '尾盘预期',
+    label: '尾盘超预期',
     window: '14:30–15:00',
     active: !!clock.active,
     mode: clock.key,
@@ -3561,9 +3706,12 @@ function tailBoardFromSnapshot(tradeDate, market) {
   }
   return {
     ...base,
-    status: 'closed',
-    statusLabel: '收盘留痕',
-    reason: '这是收盘前最后一次尾盘留痕，只作明日观察；不是隔夜三强，也不是买入指令。',
+    status: clock.key === 'live' ? 'live' : 'closed',
+    statusLabel: clock.key === 'live' ? '尾盘计算中' : '收盘留痕',
+    reason:
+      clock.key === 'live'
+        ? '这是正在计算的尾盘超预期；收盘后以最后一份留痕为准。'
+        : '这是收盘前最后一次尾盘留痕，只作明日观察；不是隔夜三强，也不是买入指令。',
     universe: snap.universe || 0,
     items,
     counts: snap.counts || [],
@@ -3602,7 +3750,7 @@ function buildTailBoard(strong, { market, stage, tradeDate, now }) {
   const clock = tailTimeState(market, stage)
   const base = {
     key: 'tail',
-    label: '尾盘预期',
+    label: '尾盘超预期',
     window: '14:30–15:00',
     tradeDate: tradeDate || '',
     active: !!clock.active,
@@ -3620,66 +3768,118 @@ function buildTailBoard(strong, { market, stage, tradeDate, now }) {
   }
   if (!clock.active) return base
 
-  const list = Array.isArray(strong) ? strong.filter((x) => x && x.code) : []
+  const all = Array.isArray(strong) ? strong.filter((x) => x && x.code) : []
+  /* 同板块今天有几只已经封板：这是“中低位补涨预期差”的核心证据，不拿涨停家数硬凑 */
+  const sectorSealCount = new Map()
+  for (const x of all) {
+    if (!x.sealed) continue
+    const key = x.sector || x.industry || '未分类'
+    sectorSealCount.set(key, (sectorSealCount.get(key) || 0) + 1)
+  }
+
+  /* 尾盘只从中低位池里选：已封板、今日炸板/涨停池、高位连板都不进入候选宇宙 */
+  const list = all.filter(
+    (x) =>
+      !x.sealed &&
+      !x.fromPool &&
+      (x.tailScan || x.status === 'watch' || x.status === 'confirm')
+  )
   const counts = new Map()
   const near = []
   const eligible = []
   for (const x of list) {
-    const reject = tailRejectReason(x)
-    const score = tailExpectationScore(x)
+    const sectorKey = x.sector || x.industry || '未分类'
+    const ctx = { sectorSealCount: sectorSealCount.get(sectorKey) || 0 }
+    const open = tailOpenProfile(x)
+    const reject = tailRejectReason(x, ctx)
+    const score = tailExpectationScore(x, ctx)
     const reason =
-      reject || (score < TAIL_SCORE_THRESHOLD ? `尾盘预期分 ${score} < ${TAIL_SCORE_THRESHOLD}` : null)
+      reject || (score < TAIL_SCORE_THRESHOLD ? `超预期分 ${score} < ${TAIL_SCORE_THRESHOLD}` : null)
     if (reason) {
       const group = tailRejectGroup(reason)
       counts.set(group, (counts.get(group) || 0) + 1)
-      /* 差一点只列“本来就没涨停”的票：已封板 / 今日炸板不是尾盘预期的近邻 */
-      if (!x.sealed && !x.fromPool) {
-        near.push({ code: x.code, name: x.name, pct: x.pct, geneScore: x.geneScore, score, reason })
+      /* 差一点只列本来就在中低位的票：高位 / 贴板 / 涨停池不是尾盘超预期的近邻 */
+      const lowPos =
+        num(x.pct, 0) <= TAIL_MAX_PCT + 0.5 &&
+        num(x.gapToLimit, 0) >= TAIL_MIN_GAP - 0.5
+      if (lowPos) {
+        near.push({
+          code: x.code,
+          name: x.name,
+          pct: x.pct,
+          geneScore: x.geneScore,
+          score,
+          reason
+        })
       }
       continue
     }
-    eligible.push({ x, score })
+    eligible.push({ x, score, ctx, open })
   }
   const items = eligible
     .sort(
       (a, b) =>
         b.score - a.score ||
-        num(b.x.geneScore, 0) - num(a.x.geneScore, 0) ||
-        tailCloseStrength(b.x) - tailCloseStrength(a.x)
+        num(a.x.pct, 0) - num(b.x.pct, 0) ||
+        num(b.x.geneScore, 0) - num(a.x.geneScore, 0)
     )
     .slice(0, TAIL_BOARD_SIZE)
     .map((row, idx) => {
       const x = row.x
       const score = row.score
+      const ctx = row.ctx
+      const open = row.open
       const strength = tailCloseStrength(x)
       const seen = tailFirstSeenOf(tradeDate, x.code, stamp)
       const tags = []
+      tags.push(open.label)
       if (strength >= 85) tags.push('收在日内高位')
       else tags.push('尾盘不弱')
-      if (x.sectorReady) tags.push('板块三关')
-      else if (x.sectorTodayCount != null) tags.push(`板块涨停 ${x.sectorTodayCount} 家`)
-      if (x.volRatio != null && x.volRatio >= 1.5) tags.push(`量比 ${round(x.volRatio, 2)}`)
-      if (x.weakLabel) tags.push(x.weakLabel)
+      /* 板块核心由卡片上的独立 chip 展示，tag 只在没有核心时补板块证据 */
+      if (ctx.sectorSealCount < 1) {
+        if (x.sectorReady) tags.push('板块三关')
+        else if (x.sectorTodayCount != null) tags.push(`板块涨停 ${x.sectorTodayCount} 家`)
+      }
+      if (x.volRatio != null && x.volRatio >= 1.2 && x.volRatio <= 2.8) {
+        tags.push(`量比 ${round(x.volRatio, 2)}`)
+      }
+      if (x.turnover != null && x.turnover >= 3 && x.turnover <= 15) {
+        tags.push(`换手 ${round(x.turnover, 1)}%`)
+      }
+      if (x.pct <= 4.5) tags.push('中低位')
+      if (x.weakLabel && !(x.weak && x.weak.kind === 'fresh')) tags.push(x.weakLabel)
       if (x.nodeLabel && x.nodeLabel !== '低位跟随' && x.nodeLabel !== '无高度') {
         tags.push(x.nodeLabel)
       }
       tags.push('未涨停')
-      tags.push('全市场扫描')
 
+      const openLine =
+        open.openPct == null
+          ? '开盘：缺少开盘价，无法判断是否低开高走'
+          : `开盘 ${open.openPct > 0 ? '+' : ''}${open.openPct}% → 现 ${x.pct > 0 ? '+' : ''}${round(x.pct, 2)}%，${open.label}`
       const trendLine = `今日 ${x.pct > 0 ? '+' : ''}${round(x.pct, 2)}% · 未涨停 · 距涨停 ${round(x.gapToLimit, 2)} 点 · 收盘位于日内 ${strength}%`
-      const geneLine = `基因 ${x.geneScore} · ${x.volRatio != null ? `量比 ${round(x.volRatio, 2)}` : '量比缺失'} · 成交 ${amountText(x.amount)}${x.turnover != null ? ` · 换手 ${round(x.turnover, 1)}%` : ''}`
-      const sectorLine = `「${x.sector || '未分类'}」${x.sectorReady ? '板块三关通过' : x.sectorTodayCount != null ? `今日 ${x.sectorTodayCount} 家涨停` : '板块证据有限'}${x.sectorHeat != null ? ` · 热度 ${x.sectorHeat}` : ''}`
-      const nodeLine = x.nodeLabel
-        ? `节点 ${x.nodeLabel} ${x.nodeScore == null ? '--' : x.nodeScore}${x.weakLabel ? ` · ${x.weakLabel}` : ''}`
-        : '节点：非涨停池成员，缺少封板质量，按全市场强势股处理'
+      const volumeLine = `基因 ${x.geneScore} · ${x.volRatio != null ? `量比 ${round(x.volRatio, 2)}` : '量比缺失'} · 成交 ${amountText(x.amount)}${x.turnover != null ? ` · 换手 ${round(x.turnover, 1)}%` : ''}`
+      const sectorLine =
+        `「${x.sector || '未分类'}」` +
+        (ctx.sectorSealCount
+          ? `同板块 ${ctx.sectorSealCount} 只已封板，个股仍在${x.pct <= 4.5 ? '中低位' : '中位'}`
+          : x.sectorReady
+            ? '板块三关通过，但没有已封板核心'
+            : `今日 ${x.sectorTodayCount == null ? '--' : x.sectorTodayCount} 家涨停，板块证据有限`)
+
       const risks = [
         '今日没有涨停，尾盘强不等于明天必高开；竞价不及预期直接放弃。',
-        '不是今日涨停池成员，缺少首封时间与封单质量，不能当连板核心。',
+        '中低位预期差靠板块补涨，同板块涨停核心次日低开就放弃。',
         '尾盘拉升可能是资金做次日溢价，次日低开兑现的风险更高。',
+        ...(x.turnover != null && x.turnover > 18
+          ? [`换手 ${round(x.turnover, 1)}% 偏高，次日获利盘兑现压力大。`]
+          : []),
+        ...(open.label === '日内走强'
+          ? ['今日不是低开高走，预期差主要来自板块补涨，需竞价确认。']
+          : []),
         ...(x.nuclearLevel === 'mid' ? [`缩量加速，防核按钮：${x.nuclearShort || '次日冲高回落'}`] : []),
-        ...(x.sectorReady ? [] : ['板块未过三关，只有涨停家数 / 热度支撑，持续性需次日验证。']),
         ...(strength < 75 ? ['收盘没有贴在日内高点，尾盘承接一般。'] : []),
-        '尾盘预期不是隔夜三强，不进入隔夜条件单草稿。'
+        '尾盘超预期不是隔夜三强，不进入隔夜条件单草稿。'
       ]
       return {
         rank: idx + 1,
@@ -3690,9 +3890,14 @@ function buildTailBoard(strong, { market, stage, tradeDate, now }) {
         sectorHeat: x.sectorHeat,
         sectorReady: !!x.sectorReady,
         sectorTodayCount: x.sectorTodayCount,
+        sectorSealCount: ctx.sectorSealCount,
         lbc: x.lbc || 0,
         price: x.price,
         pct: x.pct,
+        open: x.open,
+        openPct: open.openPct,
+        gainFromOpen: open.gainFromOpen,
+        openLabel: open.label,
         high: x.high,
         low: x.low,
         prevClose: x.prevClose,
@@ -3716,13 +3921,13 @@ function buildTailBoard(strong, { market, stage, tradeDate, now }) {
         score,
         expectationScore: score,
         status: 'tail',
-        statusLabel: '尾盘预期 · 未涨停',
+        statusLabel: '尾盘超预期 · 中低位未涨停',
         tags: Array.from(new Set(tags)).slice(0, 6),
-        reasons: [trendLine, geneLine, sectorLine, nodeLine],
+        reasons: [openLine, trendLine, volumeLine, sectorLine],
         risks: Array.from(new Set(risks)).slice(0, 4),
         plan: [
-          '明日竞价高开 +1% ~ +4%，且同板块至少 1 只核心同步高开，才进入观察',
-          '高开 > +6% 放弃追高，低开 < -2% 放弃反包',
+          '明日竞价高开 +1% ~ +4%，且同板块至少 1 只涨停核心同步高开，才进入观察',
+          '高开 > +5% 视为低位预期差已被兑现，放弃追高；低开 < -2% 放弃',
           '竞价额不低于今日成交 3%，缩量低开不接',
           '催化未核验只观察，不挂单'
         ],
@@ -3736,10 +3941,10 @@ function buildTailBoard(strong, { market, stage, tradeDate, now }) {
   const result = {
     ...base,
     status: items.length ? 'ready' : 'empty',
-    statusLabel: items.length ? '尾盘预期' : '尾盘不凑数',
+    statusLabel: items.length ? '尾盘超预期' : '尾盘不凑数',
     reason: items.length
-      ? `${items.length} 只未涨停强势票收在日内高位，板块有共振；只作明日观察，不追今日尾盘。`
-      : `14:30 后扫描 ${list.length} 只，没有同时满足“未涨停、基因 ≥${TAIL_MIN_GENE}、收盘位置 ≥${TAIL_MIN_CLOSE_STRENGTH}、板块共振、成交 ≥3000 万”的票；不补位。`,
+      ? `${items.length} 只中低位未涨停收强：涨幅 ${TAIL_MIN_PCT}%–${TAIL_MAX_PCT}%、距涨停 ≥${TAIL_MIN_GAP} 点、板块有涨停核心；只作明日超预期观察。`
+      : `14:30 后扫描 ${list.length} 只中低位活跃股，没有同时满足“未涨停、涨幅 ${TAIL_MIN_PCT}%–${TAIL_MAX_PCT}%、距涨停 ≥${TAIL_MIN_GAP} 点、收盘位置 ≥${TAIL_MIN_CLOSE_STRENGTH}、成交 ≥5000 万、换手 ≤${TAIL_MAX_TURNOVER}%、板块有涨停核心”的票；不补位。`,
     universe: list.length,
     eligible: eligible.length,
     items,

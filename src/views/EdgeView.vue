@@ -184,7 +184,7 @@ const auctionStage = computed(() => (auction.value && auction.value.stage) || nu
 const auctionActive = computed(() => !!(auction.value && auction.value.active))
 const auctionIsIntraday = computed(() => !!(auction.value && auction.value.intraday))
 
-/* 尾盘预期：14:30–15:00 的未涨停明日观察榜，和隔夜三强分开 */
+/* 尾盘超预期：14:30–15:00 的中低位未涨停明日观察榜，和隔夜三强分开 */
 const tailBoard = computed(() => (auction.value && auction.value.tail) || null)
 const tailItems = computed(() => (tailBoard.value && tailBoard.value.items) || [])
 const tailPlanOpen = ref('')
@@ -770,7 +770,7 @@ onBeforeUnmount(() => {
 
         <section v-if="tailBoard" class="tail-section" :class="`tail-section--${tailBoard.status}`">
           <header class="section-head tail-head">
-            <span class="section-title">尾盘预期 · 明日观察</span>
+            <span class="section-title">尾盘超预期 · 明日观察</span>
             <span class="chip" :class="tailChipClass">{{ tailBoard.statusLabel }}</span>
             <span class="section-count">
               {{ tailBoard.window }}
@@ -804,17 +804,23 @@ onBeforeUnmount(() => {
 
               <div class="chip-row">
                 <span class="chip chip--gold">今日未涨停</span>
-                <span class="chip" :class="t.sectorReady ? 'chip--gold' : 'chip--dim'">
-                  {{ t.sectorReady ? '板块三关' : '板块未过三关' }}
+                <span class="chip" :class="t.sectorSealCount ? 'chip--gold' : t.sectorReady ? 'chip--dim' : 'chip--warn'">
+                  {{
+                    t.sectorSealCount
+                      ? `板块 ${t.sectorSealCount} 只涨停核心`
+                      : t.sectorReady
+                        ? '板块三关'
+                        : `板块涨停 ${t.sectorTodayCount == null ? '--' : t.sectorTodayCount} 家`
+                  }}
                 </span>
                 <span v-for="tag in t.tags" :key="tag" class="tag">{{ tag }}</span>
               </div>
 
-              <div class="metric-grid">
+              <div class="metric-grid metric-grid--tail">
                 <div class="metric">
                   <small>今日涨幅</small>
                   <b :class="pctTone(t.pct)">{{ fmtPct(t.pct) }}</b>
-                  <span>距离涨停 {{ fmtPct(t.gapToLimit, { sign: false }) }}</span>
+                  <span>开 {{ t.openPct == null ? '--' : fmtPct(t.openPct, { digits: 1 }) }} · 板距 {{ fmtPct(t.gapToLimit, { digits: 1, sign: false }) }}</span>
                 </div>
                 <div class="metric">
                   <small>收盘位置</small>
@@ -882,7 +888,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <p class="tail-note">
-              没有同时满足条件的票就不补位；尾盘预期不是隔夜三强，也不进入条件单草稿。
+              没有同时满足「中低位、未涨停、收盘走强、板块有涨停核心」的票就不补位；尾盘超预期不是隔夜三强，也不进入条件单草稿。
             </p>
           </div>
 
@@ -1090,7 +1096,7 @@ onBeforeUnmount(() => {
             <div class="rule-line"><span>06</span><p>只做非双创标的；科创板 688/689、创业板 300/301 的 20cm 不进入榜单和预警。</p></div>
             <div class="rule-line"><span>07</span><p>预警推荐只保留未封板、距涨停 &gt;0.3 个点且预警分 ≥70 的票，按预警分从强到弱最多 3 只；已封板只排队观察，不弹“买不进”的票。</p></div>
             <div class="rule-line"><span>08</span><p>推荐时间、最近更新时间保存在浏览器本地，刷新页面不会清空；当前榜单变化只影响“在榜 / 已移出”，不改写首次推荐时间。</p></div>
-            <div class="rule-line"><span>09</span><p>14:30–15:00 另算「尾盘预期」：今天没涨停、距涨停 &gt;0.5 点、收盘位置 ≥60%、基因 ≥68、板块共振，最多 3 只；只作明日观察，不是隔夜三强，也不进入条件单草稿。</p></div>
+            <div class="rule-line"><span>09</span><p>14:30–15:00 另算「尾盘超预期」：只从中低位活跃股里筛今天没涨停、涨幅 0.5%–6.5%、距涨停 ≥3 点、收盘位置 ≥65%、成交 ≥5000 万、换手 ≤25%、板块有涨停核心的票，最多 3 只；贴板 / 高位连板 / 涨停池炸板票直接剔除，只作明日观察，不是隔夜三强，也不进入条件单草稿。</p></div>
           </template>
           <template v-else>
             <div class="rule-line"><span>01</span><p>9:15–9:20 可撤单，只看不追；虚假挂单不计入判断。</p></div>
@@ -2327,6 +2333,10 @@ onBeforeUnmount(() => {
   overflow: hidden;
   border: 1px solid var(--line);
   background: var(--line);
+}
+
+.metric-grid--tail {
+  grid-template-columns: repeat(2, 1fr);
 }
 
 .metric {

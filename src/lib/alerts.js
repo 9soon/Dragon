@@ -442,7 +442,7 @@ function notifyDesktop(alert) {
   try {
     const n = new Notification(
       alert.tailSummary
-        ? `尾盘预期 · 明日观察 · ${alert.names.length} 只`
+        ? `尾盘超预期 · 明日观察 · ${alert.names.length} 只`
         : `${alert.intraday ? '盘中预警' : '竞价预警'} · ${alert.actionable ? '可执行' : '观察'} · ${alert.name}`,
       {
         body: alert.tailSummary
@@ -624,7 +624,7 @@ export function refreshAlertDiagnostics() {
   return diagPromise
 }
 
-/* 尾盘预期不是个股买入预警：每天最多弹一次 3 只汇总，只作明日观察 */
+/* 尾盘超预期不是个股买入预警：每天最多弹一次 3 只汇总，只作明日观察 */
 function tailSummaryOf(tail, payload) {
   const at = Date.now()
   const items = (tail.items || []).filter((x) => x && x.code).slice(0, 3)
@@ -640,7 +640,7 @@ function tailSummaryOf(tail, payload) {
     stageKey: 'tail',
     stageLabel: '尾盘 14:30–15:00',
     intraday: true,
-    statusLabel: '尾盘预期 · 明日观察',
+    statusLabel: '尾盘超预期 · 明日观察',
     names: items.map((x) => `${x.name} ${x.score}`),
     actionableCount: 0,
     pendingCount: items.length,

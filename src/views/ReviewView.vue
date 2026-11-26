@@ -77,7 +77,7 @@ const tailVisible = computed(
 )
 const tailTone = computed(() => {
   const status = tailBrief.value ? tailBrief.value.status : ''
-  if (status === 'closed' || status === 'ready') return 'chip--gold'
+  if (status === 'closed' || status === 'ready' || status === 'live') return 'chip--gold'
   if (status === 'empty') return 'chip--warn'
   return 'chip--dim'
 })
@@ -412,7 +412,7 @@ function tierTone(v) {
 
     <section v-if="tailVisible" class="section tail-review-section">
       <header class="section-head">
-        <span class="section-title">尾盘预期</span>
+        <span class="section-title">尾盘超预期</span>
         <span class="section-count">14:30–15:00 · 最多 3 只 · 明日观察</span>
       </header>
 
@@ -435,8 +435,10 @@ function tierTone(v) {
               <div class="night-meta">
                 <span>预期分 <b>{{ t.score }}</b></span>
                 <span :class="pctTone(t.pct)">{{ fmtPct(t.pct) }}</span>
+                <span v-if="t.openPct != null">{{ t.openLabel }} {{ fmtPct(t.openPct) }}</span>
                 <span>距涨停 {{ fmtPct(t.gapToLimit, { sign: false }) }}</span>
                 <span>收盘位置 {{ t.closeStrength == null ? '--' : t.closeStrength + '%' }}</span>
+                <span v-if="t.sectorSealCount">板块核心 {{ t.sectorSealCount }} 只</span>
                 <span v-if="t.volRatio != null">量比 {{ fmtNum(t.volRatio, 2) }}</span>
                 <span v-if="t.recommendTime">推荐 {{ t.recommendTime }}</span>
               </div>
@@ -460,14 +462,14 @@ function tierTone(v) {
             {{
               tailBrief.mode === 'live'
                 ? '实时尾盘榜在「竞价 / 盘中」页；这里只展示已落盘的留痕。'
-                : '只筛今天没涨停、收盘位置强且板块共振的票；没有就空着，不把尾盘预期混进隔夜三强。'
+                : '只筛今天没涨停、仍在中低位、收盘走强且板块有涨停核心的票；没有就空着，不把尾盘超预期混进隔夜三强。'
             }}
           </p>
         </div>
 
         <p class="night-note tail-review-note">
-          尾盘预期与隔夜三强分开：它不要求今日封板，也不进入条件单草稿。明日竞价高开 +1%–4%
-          且同板块至少 1 只核心同步才观察；高开 &gt;6% 或低开 &lt;-2% 直接放弃。
+          尾盘超预期与隔夜三强分开：它不要求今日封板，也不进入条件单草稿；只从中低位活跃股里找今天没涨停、收盘走强、板块有涨停核心的票。明日竞价高开 +1%–4%
+          且同板块至少 1 只涨停核心同步才观察；高开 &gt;5% 或低开 &lt;-2% 直接放弃。
         </p>
       </div>
     </section>
@@ -2634,7 +2636,7 @@ function tierTone(v) {
   color: var(--dim);
 }
 
-/* ---------- 尾盘预期 ---------- */
+/* ---------- 尾盘超预期 ---------- */
 
 .tail-review-section .section-title {
   color: var(--gold);

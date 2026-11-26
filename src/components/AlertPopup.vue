@@ -21,7 +21,7 @@ const duration = computed(() => (isSummary.value ? 24000 : 16000))
 
 const kickerText = computed(() => {
   if (!props.alert) return ''
-  if (isTail.value) return '尾盘预期 · 明日观察'
+  if (isTail.value) return '尾盘超预期 · 明日观察'
   const mode = isIntraday.value ? '盘中' : '竞价'
   if (isSummary.value) return `${mode}预警 · 本轮汇总`
   if (actionable.value) return `${mode}预警 · ${isIntraday.value ? '可执行' : '可挂单'}`
@@ -117,10 +117,10 @@ function onCatalyst() {
         <template v-if="isSummary">
           <div class="alert-summary">
             <div class="alert-summary-main">
-              <b v-if="isTail">尾盘预期 {{ alert.names.length }} 只 · 今日均未涨停</b>
+              <b v-if="isTail">尾盘超预期 {{ alert.names.length }} 只 · 今日均未涨停</b>
               <b v-else>本轮{{ isIntraday ? '盘中' : '竞价' }}预警 {{ alert.names.length }} 只</b>
               <p v-if="isTail">
-                14:30 后按收盘位置、板块共振与基因筛出，最多 3 只；只作明日观察，不是隔夜三强，也不是买入指令。
+                14:30 后只筛中低位、今日没涨停、收盘走强且板块有涨停核心的票，最多 3 只；只作明日观察，不是隔夜三强，也不是买入指令。
               </p>
               <p v-else>
                 均未{{ isIntraday ? '封板' : '涨停' }}；首次连接只汇总一次，避免一开页就被逐只弹窗淹没，之后新达标的票逐只提醒。
@@ -138,7 +138,7 @@ function onCatalyst() {
             <span v-for="name in alert.names" :key="name" class="alert-name">{{ name }}</span>
           </div>
           <p v-if="isTail" class="alert-foot-note">
-            明日竞价高开 +1% ~ +4%，且同板块至少 1 只核心同步高开，才进入观察；高开 &gt;6% 或低开 &lt;-2% 直接放弃。
+            明日竞价高开 +1% ~ +4%，且同板块至少 1 只涨停核心同步高开，才进入观察；高开 &gt;5% 或低开 &lt;-2% 直接放弃。
             尾盘强不等于明天必高开，也不是隔夜条件单。
           </p>
           <p v-else class="alert-foot-note">

@@ -591,7 +591,7 @@ async function buildDashboard() {
     warnings.push(`隔夜计划生成失败：${err.message}`)
   }
 
-  /* 尾盘预期只读当天留痕：收盘后复盘用，不拿收盘价倒推 14:30 的信号 */
+  /* 尾盘超预期只读当天留痕：收盘后复盘用，不拿收盘价倒推 14:30 的信号 */
   try {
     const tail = tailBoardFromSnapshot(dashboard.tradeDate, market)
     const trimTail = (item) => ({
@@ -603,9 +603,14 @@ async function buildDashboard() {
       sectorHeat: item.sectorHeat,
       sectorReady: !!item.sectorReady,
       sectorTodayCount: item.sectorTodayCount,
+      sectorSealCount: item.sectorSealCount,
       lbc: item.lbc,
       price: item.price,
       pct: item.pct,
+      open: item.open,
+      openPct: item.openPct,
+      gainFromOpen: item.gainFromOpen,
+      openLabel: item.openLabel || '',
       limitUp: item.limitUp,
       limitRatio: item.limitRatio,
       boardRule: item.boardRule,
@@ -622,7 +627,7 @@ async function buildDashboard() {
       nuclearShort: item.nuclearShort || '',
       score: item.score,
       expectationScore: item.expectationScore,
-      statusLabel: item.statusLabel || '尾盘预期 · 未涨停',
+      statusLabel: item.statusLabel || '尾盘超预期 · 中低位未涨停',
       recommendTime: item.recommendTime || '',
       lastSeenTime: item.lastSeenTime || '',
       tags: (item.tags || []).slice(0, 6),
