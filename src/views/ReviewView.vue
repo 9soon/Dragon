@@ -112,6 +112,103 @@ const recNoEntryReason = computed(() => {
     .join(' · ')
 })
 
+const recOvernight = computed(() => (recAudit.value && recAudit.value.overnight) || null)
+const onWindow = computed(() => (recOvernight.value && recOvernight.value.window) || {})
+const onStrict = computed(() => (recOvernight.value && recOvernight.value.strict) || {})
+const onStandby = computed(() => (recOvernight.value && recOvernight.value.standby) || {})
+const onPrep = computed(() => (recOvernight.value && recOvernight.value.prep) || {})
+const onWatch = computed(() => (recOvernight.value && recOvernight.value.watch) || {})
+const onLearning = computed(() => (recOvernight.value && recOvernight.value.learning) || null)
+const onGates = computed(() => (recOvernight.value && recOvernight.value.gates) || null)
+const onDays = computed(() => (recOvernight.value && recOvernight.value.days) || [])
+const onDaysShown = computed(() => onDays.value.slice(0, 3))
+const onShowObservations = ref(false)
+const onShareText = computed(
+  () =>
+    (recOvernight.value && recOvernight.value.share && recOvernight.value.share.text) || ''
+)
+const shareState = ref('')
+const onBuckets = computed(() => (onLearning.value && onLearning.value.buckets) || {})
+const onGapBuckets = computed(() =>
+  ((onBuckets.value && onBuckets.value.gap) || []).filter((b) => b.samples)
+)
+const onScoreBuckets = computed(() =>
+  ((onBuckets.value && onBuckets.value.score) || []).filter((b) => b.samples)
+)
+const onLbcBuckets = computed(() =>
+  ((onBuckets.value && onBuckets.value.lbc) || []).filter((b) => b.samples)
+)
+const onHeatBuckets = computed(() =>
+  ((onBuckets.value && onBuckets.value.heat) || []).filter((b) => b.samples)
+)
+const onGatesLine = computed(() => {
+  const g = onGates.value
+  if (!g || !g.days) return ''
+  const miss = (g.topMissing || [])
+    .map((x) => `${x.label} ${x.count} 次`)
+    .join(' · ')
+  return `近 ${g.days} 个定稿日：三关全过 ${g.passDays} 天${
+    miss ? `；最强板块常见缺口：${miss}` : ''
+  }`
+})
+
+const ON_TRIGGER_LABELS = {
+  lowOpen: '低开 <-2%',
+  flatOpen: '平开 -2~1%',
+  trigger: '触发 1–4%',
+  highChase: '高开 4–6%',
+  abandonGap: '放弃 >6%',
+  unknown: '待核对'
+}
+
+function onTriggerLabel(row) {
+  if (row.status === 'pending') return '待次日'
+  if (row.status === 'noKline' || row.status === 'badBar') return '数据缺失'
+  return ON_TRIGGER_LABELS[row.trigger] || '待核对'
+}
+
+function visibleOnRows(day) {
+  const rows = (day && day.rows) || []
+  if (onShowObservations.value) return rows
+  return rows.filter((row) => row.cohort === 'strict')
+}
+
+async function writeClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch (err) {
+      /* 无剪贴板权限时退回旧方案 */
+    }
+  }
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.setAttribute('readonly', '')
+  ta.style.position = 'fixed'
+  ta.style.top = '-1000px'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.select()
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch (err) {
+    ok = false
+  }
+  document.body.removeChild(ta)
+  return ok
+}
+
+async function copyOvernightShare() {
+  if (!onShareText.value) return
+  const ok = await writeClipboard(onShareText.value)
+  shareState.value = ok ? '已复制，可直接分享' : '复制失败，请长按选择文本'
+  setTimeout(() => {
+    shareState.value = ''
+  }, 2200)
+}
+
 async function loadRecAudit(force = false) {
   if (recLoading.value) return
   recLoading.value = true
@@ -295,6 +392,11 @@ function tierTone(v) {
           <div v-if="recToday" class="rec-today">
             今天已记录 {{ recToday.items }} 只（{{ recToday.action && recToday.action.label }}），
             {{ recToday.final ? '已收盘定稿' : '收盘后定稿' }}，明日收盘后核对结果。
+            <template v-if="recToday.overnight">
+              隔夜台账：严格 {{ recToday.overnight.strict }} · 待命
+              {{ recToday.overnight.standby || 0 }} · 准备
+              {{ recToday.overnight.prep }} · 观察 {{ recToday.overnight.watch }}。
+            </template>
           </div>
 
           <div v-if="recWatch.evaluated" class="rec-watch-line">
@@ -406,6 +508,234 @@ function tierTone(v) {
             当前是「{{ overnightModeLabel }}」，只作预演，不能作为挂单依据；15:00 后重算才可能定稿。
           </template>
           今日一字 / 秒板不进三强；跳空、滑点与停牌都可能让计划失效。
+        </p>
+      </div>
+    </section>
+
+    <section v-if="recAudit" class="section night-ledger-section">
+      <header class="section-head">
+        <span class="section-title">隔夜台账 · 学习</span>
+        <span class="section-count">
+          近 {{ onWindow.days || 0 }} 个定稿日 · 次日日线核对
+        </span>
+      </header>
+
+      <div class="panel night-ledger">
+        <p v-if="onGatesLine" class="on-gate-line">{{ onGatesLine }}</p>
+
+        <div class="rec-stats">
+          <div class="rec-stat">
+            <small>严格三强</small>
+            <b>{{ onStrict.samples || 0 }}</b>
+            <span>已核对 {{ onStrict.evaluated || 0 }}</span>
+          </div>
+          <div class="rec-stat">
+            <small>触发买点</small>
+            <b>{{ onStrict.triggered || 0 }}</b>
+            <span>竞价 +1%–4%</span>
+          </div>
+          <div class="rec-stat">
+            <small>触发胜率</small>
+            <b :class="onStrict.winRate == null ? 'is-flat' : onStrict.winRate >= 50 ? 'is-up' : 'is-down'">
+              {{ onStrict.winRate != null ? onStrict.winRate + '%' : '--' }}
+            </b>
+            <span>{{ onStrict.wins || 0 }} 胜 / {{ onStrict.triggered || 0 }}</span>
+          </div>
+          <div class="rec-stat">
+            <small>触发均收益</small>
+            <b :class="retTone(onStrict.avgRet)">{{ signed(onStrict.avgRet) }}</b>
+            <span>开盘→收盘</span>
+          </div>
+          <div class="rec-stat">
+            <small>次日晋级率</small>
+            <b>{{ onStrict.promoRate != null ? onStrict.promoRate + '%' : '--' }}</b>
+            <span>{{ onStrict.promoted || 0 }} / {{ onStrict.evaluated || 0 }} 只</span>
+          </div>
+        </div>
+
+        <p class="rec-caveat">
+          <template v-if="!onStrict.evaluated">
+            严格三强还没有完成次日核对的样本；台账从 11-26 盘后开始积累，不补造历史。
+          </template>
+          <template v-else-if="onStrict.triggered < 5">
+            严格三强已核对 {{ onStrict.evaluated }} 只，触发 {{ onStrict.triggered }} 只；样本少于
+            5 只只看方向，不能当稳定胜率。
+          </template>
+          <template v-else>
+            严格三强按次日竞价高开 1%–4% 触发、开盘→收盘统计；已核对
+            {{ onStrict.evaluated }} 只，不按事后最优价假设成交。
+          </template>
+        </p>
+
+        <div class="on-cohorts">
+          <span v-if="onStandby.samples">
+            候选未执行（情绪未确认）：核对 {{ onStandby.evaluated || 0 }} · 触发
+            {{ onStandby.triggered || 0 }}<template v-if="onStandby.winRate != null">
+              · 胜率 {{ onStandby.winRate }}%</template
+            >
+          </span>
+          <span>
+            准备池对照（不推荐）：核对 {{ onPrep.evaluated || 0 }} · 触发
+            {{ onPrep.triggered || 0 }}<template v-if="onPrep.winRate != null">
+              · 胜率 {{ onPrep.winRate }}%</template
+            >
+          </span>
+          <span>
+            观察池对照（不推荐）：核对 {{ onWatch.evaluated || 0 }} · 触发
+            {{ onWatch.triggered || 0 }}<template v-if="onWatch.winRate != null">
+              · 胜率 {{ onWatch.winRate }}%</template
+            >
+          </span>
+        </div>
+
+        <div v-if="onLearning" class="on-learning">
+          <div class="on-learning-head">
+            <b>分桶学习</b>
+            <span>样本 &lt;{{ onLearning.minSamples }} 只只看方向，不自动调权重</span>
+          </div>
+          <p v-for="(note, i) in onLearning.notes" :key="i" class="on-note">{{ note }}</p>
+
+          <div v-if="onGapBuckets.length" class="on-bucket-block">
+            <div class="on-bucket-title">按竞价缺口</div>
+            <div class="on-bucket-grid">
+              <div v-for="b in onGapBuckets" :key="'gap-' + b.label" class="on-bucket">
+                <span>{{ b.label }}</span>
+                <b :class="b.enough ? retTone(b.avgRet) : ''">
+                  {{ b.triggered ? signed(b.avgRet) : '--' }}
+                </b>
+                <small>
+                  {{ b.samples }} 只 · 核对 {{ b.evaluated }} · 触发 {{ b.triggered
+                  }}<template v-if="b.winRate != null"> · 胜 {{ b.winRate }}%</template>
+                </small>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="onScoreBuckets.length" class="on-bucket-block">
+            <div class="on-bucket-title">按隔夜分</div>
+            <div class="on-bucket-grid">
+              <div v-for="b in onScoreBuckets" :key="'score-' + b.label" class="on-bucket">
+                <span>{{ b.label }}</span>
+                <b :class="b.enough ? retTone(b.avgRet) : ''">
+                  {{ b.triggered ? signed(b.avgRet) : '--' }}
+                </b>
+                <small>
+                  {{ b.samples }} 只 · 核对 {{ b.evaluated }} · 触发 {{ b.triggered
+                  }}<template v-if="b.winRate != null"> · 胜 {{ b.winRate }}%</template>
+                </small>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="onLbcBuckets.length" class="on-bucket-block">
+            <div class="on-bucket-title">按连板高度</div>
+            <div class="on-bucket-grid">
+              <div v-for="b in onLbcBuckets" :key="'lbc-' + b.label" class="on-bucket">
+                <span>{{ b.label }}</span>
+                <b :class="b.enough ? retTone(b.avgRet) : ''">
+                  {{ b.triggered ? signed(b.avgRet) : '--' }}
+                </b>
+                <small>
+                  {{ b.samples }} 只 · 核对 {{ b.evaluated }} · 触发 {{ b.triggered
+                  }}<template v-if="b.winRate != null"> · 胜 {{ b.winRate }}%</template>
+                </small>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="onHeatBuckets.length" class="on-bucket-block">
+            <div class="on-bucket-title">按板块热度</div>
+            <div class="on-bucket-grid">
+              <div v-for="b in onHeatBuckets" :key="'heat-' + b.label" class="on-bucket">
+                <span>{{ b.label }}</span>
+                <b :class="b.enough ? retTone(b.avgRet) : ''">
+                  {{ b.triggered ? signed(b.avgRet) : '--' }}
+                </b>
+                <small>
+                  {{ b.samples }} 只 · 核对 {{ b.evaluated }} · 触发 {{ b.triggered
+                  }}<template v-if="b.winRate != null"> · 胜 {{ b.winRate }}%</template>
+                </small>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="onDays.length" class="on-days">
+          <div class="on-days-head">
+            <b>最近定稿</b>
+            <span>最近 {{ onDaysShown.length }} 日</span>
+          </div>
+          <div v-for="day in onDaysShown" :key="day.date" class="rec-day">
+            <div class="rec-day-head">
+              <b>{{ shortDate(day.date) }}</b>
+              <span class="chip" :class="day.status === 'ready' ? 'chip--green' : 'chip--dim'">
+                {{ day.statusLabel || '盘后定稿' }}
+              </span>
+              <span class="rec-day-action">
+                严格 {{ day.stats.strict.samples }} · 待命
+                {{ day.stats.standby.samples }} · 准备 {{ day.stats.prep.samples }} · 观察
+                {{ day.stats.watch.samples }}
+              </span>
+              <span class="rec-day-stat">
+                触发 {{ day.stats.strict.triggered }}/{{ day.stats.strict.evaluated }}
+              </span>
+            </div>
+            <div
+              v-for="row in visibleOnRows(day)"
+              :key="day.date + row.cohort + row.code"
+              class="rec-row"
+            >
+              <span class="chip" :class="row.cohort === 'strict' ? 'chip--gold' : 'chip--dim'">
+                {{ row.cohortLabel }}
+              </span>
+              <b>{{ row.name }}</b>
+              <span class="rec-code">{{ row.code }}</span>
+              <span>{{ row.lbc }} 板</span>
+              <span v-if="row.score != null">隔夜分 {{ row.score }}</span>
+              <span :class="retTone(row.gap)">缺口 {{ signed(row.gap) }}</span>
+              <span :class="retTone(row.dayRet)">开→收 {{ signed(row.dayRet) }}</span>
+              <span class="rec-trigger" :class="{ 'is-hit': row.trigger === 'trigger' }">
+                {{ onTriggerLabel(row) }}
+              </span>
+              <span v-if="row.promoted" class="chip chip--red">晋级</span>
+              <span v-else-if="row.touchedLimit" class="chip chip--warn">触板未封</span>
+            </div>
+            <p v-if="!day.stats.strict.samples" class="on-obs-line">
+              严格 0 只；<template v-if="day.standbyNames.length"
+              >候选未执行 {{ day.standbyNames.join('、') }}；</template>准备池
+              {{ day.prepNames.join('、') || '无' }}<template v-if="day.watchNames.length"
+              >；观察池 {{ day.watchNames.join('、') }}</template>（对照，不挂单）
+            </p>
+            <p v-if="!day.rows.length" class="on-obs-line">
+              没有候选记录：{{ day.reason || '数据不足' }}
+            </p>
+          </div>
+          <button
+            class="rec-toggle"
+            type="button"
+            @click="onShowObservations = !onShowObservations"
+          >
+            {{ onShowObservations ? '只看严格三强' : '展开准备池 / 观察池对照' }}
+          </button>
+        </div>
+        <div v-else class="rec-empty">
+          还没有隔夜台账。今天盘后定稿后开始记录严格三强与准备池对照，次日收盘后用真实日线核对。
+        </div>
+
+        <div v-if="onShareText" class="on-share">
+          <div class="on-share-head">
+            <b>分享口径</b>
+            <button class="on-share-btn" type="button" @click="copyOvernightShare">
+              {{ shareState || '复制分享文案' }}
+            </button>
+          </div>
+          <pre>{{ onShareText }}</pre>
+        </div>
+
+        <p class="rec-note">
+          隔夜台账只记录 15:00 后定稿的计划；只有三关 + 情绪修复/主升的候选才算严格三强，是唯一按“推荐”统计的样本。情绪未确认的候选、准备池与观察池只作对照，不挂单、不计入推荐胜率。
+          执行口径固定为竞价高开 1%–4% 触发，&gt;6% 放弃，&lt;-2% 放弃；一字 / 秒板不进严格三强。
+          样本少于 5 只只展示方向，不自动调权重；不补造历史。
         </p>
       </div>
     </section>
@@ -2503,6 +2833,185 @@ function tierTone(v) {
   font-size: 10px;
   line-height: 1.7;
   color: var(--dim);
+}
+
+/* ---------- 隔夜台账 · 学习 ---------- */
+
+.night-ledger-section .section-title {
+  color: var(--gold);
+}
+
+.night-ledger {
+  border-color: rgba(243, 199, 119, 0.16);
+}
+
+.on-gate-line {
+  margin: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10.6px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.on-cohorts {
+  display: grid;
+  gap: 4px;
+  margin: 8px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.022);
+  font-size: 10.4px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+
+.on-learning {
+  margin-top: 10px;
+  padding: 0 14px;
+}
+
+.on-learning-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding-bottom: 4px;
+}
+
+.on-learning-head b {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.on-learning-head span {
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.on-note {
+  margin: 4px 0 0;
+  font-size: 10.4px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.on-bucket-block {
+  margin-top: 8px;
+}
+
+.on-bucket-title {
+  margin-bottom: 5px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+
+.on-bucket-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.on-bucket {
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.on-bucket span {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.on-bucket b {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text);
+}
+
+.on-bucket small {
+  display: block;
+  margin-top: 1px;
+  font-size: 9px;
+  color: var(--dim);
+}
+
+.on-days {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.on-days-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 14px 0;
+}
+
+.on-days-head b {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.on-days-head span {
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.on-obs-line {
+  margin: 0;
+  padding: 7px 14px 9px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.05);
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+
+.on-share {
+  margin: 10px 14px 0;
+  border: 1px solid rgba(243, 199, 119, 0.2);
+  border-radius: 8px;
+  background: rgba(243, 199, 119, 0.035);
+}
+
+.on-share-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(243, 199, 119, 0.12);
+}
+
+.on-share-head b {
+  font-size: 11px;
+  color: var(--gold);
+}
+
+.on-share-btn {
+  margin-left: auto;
+  padding: 5px 10px;
+  border: 1px solid rgba(243, 199, 119, 0.28);
+  border-radius: 5px;
+  background: rgba(243, 199, 119, 0.08);
+  font-size: 10px;
+  color: var(--gold);
+}
+
+.on-share pre {
+  margin: 0;
+  padding: 9px 10px 11px;
+  font-family: var(--mono);
+  font-size: 9.6px;
+  line-height: 1.7;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ---------- 隔夜三强 ---------- */

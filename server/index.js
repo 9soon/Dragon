@@ -552,6 +552,7 @@ async function buildDashboard() {
       prepScore: item.prepScore,
       basePrep: item.basePrep,
       geneScore: item.geneScore,
+      sectorHeat: item.sectorHeat != null ? item.sectorHeat : null,
       weakLabel: item.weakLabel || '',
       coreLabel: item.coreLabel || '',
       coreAdjust: item.coreAdjust || 0,
@@ -583,6 +584,7 @@ async function buildDashboard() {
       plan: overnight.plan || null,
       recommendations: (overnight.recommendations || []).slice(0, overnight.topN || 3).map(trim),
       preparation: (overnight.preparation || []).slice(0, 5).map(trim),
+      watchlist: (overnight.watchlist || []).slice(0, 8).map(trim),
       nodeBoard: overnight.nodeBoard || null,
       updatedAt: overnight.generatedAt
     }
