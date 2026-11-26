@@ -163,13 +163,36 @@ function recordRecommendations(dashboard) {
         b.lbc - a.lbc ||
         num(b.hotScore, 0) - num(a.hotScore, 0)
     )
-  if (!items.length) return null
+  const store = loadStore()
+  const existed = store.days[date]
+  /* 定稿后不再改写，避免之后行情重建把已经记录的建议换掉 */
+  if (existed && existed.final) return existed
+
+  /* 收盘重建时复盘计划可能因板块数据缺失变成空清单。
+   * 这时保留盘中最后一份推荐并定稿，不能把当天样本丢掉。 */
+  if (!items.length) {
+    if (!final || !existed || !Array.isArray(existed.items) || !existed.items.length) {
+      return existed || null
+    }
+    const closedDay = {
+      ...existed,
+      final: true,
+      finalizedAt: new Date().toISOString()
+    }
+    store.days[date] = closedDay
+    store.updatedAt = new Date().toISOString()
+    lastSignature = daySignature(closedDay)
+    saveStore(store)
+    auditCache = null
+    return closedDay
+  }
 
   const day = {
     date,
     asOf: dashboard.serverTime || null,
     generatedAt: new Date().toISOString(),
     final,
+    finalizedAt: final ? new Date().toISOString() : null,
     actionable: ACTIONABLE_CAN_ACT.has(action.canAct),
     action: {
       canAct: action.canAct || null,
@@ -179,9 +202,6 @@ function recordRecommendations(dashboard) {
     },
     items
   }
-  const store = loadStore()
-  const existed = store.days[date]
-  if (existed && existed.final && !final) return existed
   const signature = daySignature(day)
   if (existed && signature === lastSignature) return existed
   store.days[date] = day
