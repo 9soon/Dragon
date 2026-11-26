@@ -1046,6 +1046,13 @@ function nodeThesisOf(node, maxBoard) {
   return '梯队跟随，不具前排地位'
 }
 
+function stockCloseOf(stock) {
+  if (!stock) return null
+  const price = num(stock.price, null)
+  if (price != null) return price
+  return num(stock.close, null)
+}
+
 function planItemOf(x, rank) {
   const stock = x.stock
   return {
@@ -1054,6 +1061,7 @@ function planItemOf(x, rank) {
     name: stock.name,
     sector: x.sector ? x.sector.name : stock.sector || null,
     lbc: x.lbc,
+    close: stockCloseOf(stock),
     nodeScore: x.node.score,
     nodeLabel: x.node.label,
     nodeRole: x.node.role,
@@ -1300,6 +1308,8 @@ function buildHotshotSection(items) {
       const lbc = x.lbc
       if (lbc < 1 || lbc > 2) return false
       if (is20cmCode(stock.code)) return false
+      /* 一字 / 秒板今天买不到，不能拿买不到的样本做明日执行清单 */
+      if (!x.tradableBoard) return false
       /* 明日待选只从三关全过的板块里取；只过 1–2 关的降为观察，不降标准补位 */
       if (!x.sector || !x.sector.dataReady) return false
       /* 只做板块龙一：龙一是 3 板或不在 1–2 板范围时，宁可空仓，不拿跟随卡位 */
@@ -1345,6 +1355,9 @@ function buildHotshotSection(items) {
 
   const readySet = new Set(ready.map((x) => x.stock.code))
   const whyWatch = (x) => {
+    if (!x.tradableBoard) {
+      return '今日一字 / 秒板，明日只能看竞价换手，不给舒服买点，不进明日待选'
+    }
     if (!x.sector || !x.sector.dataReady) {
       return `板块三关未全过（${num(x.sector && x.sector.gatesPassed, 0)}/3），只观察，不进明日待选`
     }
@@ -1407,6 +1420,9 @@ function buildHotshotSection(items) {
     lbc: x.lbc,
     sector: x.sector.name,
     score: x.hotScore,
+    close: stockCloseOf(x.stock),
+    tradableBoard: !!x.tradableBoard,
+    oneWord: !x.tradableBoard,
     tags: hotshotTagsOf(x),
     why: [
       `${x.lbc} 板 · 首封 ${sealTimeLabel(x.stock.firstSeal)} · ${
@@ -1463,6 +1479,9 @@ function buildHotshotSection(items) {
       lbc: x.lbc,
       sector: x.sector.name,
       score: x.hotScore,
+      close: stockCloseOf(x.stock),
+      tradableBoard: true,
+      oneWord: false,
       bucket: plan.bucket,
       bucketLabel: plan.bucketLabel,
       tags: hotshotTagsOf(x),
@@ -1501,6 +1520,9 @@ function buildHotshotSection(items) {
     lbc: x.lbc,
     sector: x.sector.name,
     score: x.hotScore,
+    close: stockCloseOf(x.stock),
+    tradableBoard: !!x.tradableBoard,
+    oneWord: !x.tradableBoard,
     reason: whyWatch(x),
     tags: hotshotTagsOf(x)
   }))

@@ -69,6 +69,13 @@ export function getAlertDiagnostics() {
   return request('/api/alert-diagnostics', { timeout: 6000 })
 }
 
+export function getRecAudit({ days = 10, force = false } = {}) {
+  return request(
+    `/api/rec-audit?days=${encodeURIComponent(days)}${force ? '&refresh=1' : ''}`,
+    { timeout: 20000 }
+  )
+}
+
 export function getOvernight() {
   return request('/api/overnight', { timeout: 18000 })
 }

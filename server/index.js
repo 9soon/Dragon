@@ -56,6 +56,7 @@ const {
   peekPromotionCalibration,
   publicCalibration
 } = require('./calibration')
+const { recordRecommendations, getRecAudit } = require('./rec-ledger')
 
 const PORT = Number(process.env.PORT || 8787)
 const DIST = path.join(__dirname, '..', 'dist')
@@ -587,6 +588,11 @@ async function buildDashboard() {
   lastGood = dashboard
   lastGoodAt = Date.now()
   persistCache(dashboard)
+  try {
+    recordRecommendations(dashboard)
+  } catch (err) {
+    warnings.push(`推荐台账记录失败：${err.message}`)
+  }
   setTimeout(() => warmDragonProfile(tradeDate), 3000)
   return dashboard
 }
@@ -796,6 +802,14 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
+    if (pathname === '/api/rec-audit') {
+      const days = Math.max(3, Math.min(20, Number(url.searchParams.get('days')) || 10))
+      const force = url.searchParams.get('refresh') === '1'
+      const data = await getRecAudit({ days, force })
+      sendJson(res, 200, data)
+      return
+    }
+
     if (pathname === '/api/overnight') {
       const dashboard = await getDashboard()
       const data = buildOvernight({ dashboard, profile: peekDragonProfile() })
@@ -961,6 +975,23 @@ server.listen(PORT, '0.0.0.0', () => {
     }
   }
   setInterval(snapshotAuctionWindow, 15000)
+
+  /* 收盘后自动重建一次看板：即使没人打开页面，也用最终收盘价把推荐台账定稿 */
+  let lastCloseFinalizeKey = ''
+  setInterval(async () => {
+    const bj = beijingNow()
+    const mins = bj.getHours() * 60 + bj.getMinutes()
+    if (mins < 15 * 60 + 3) return
+    const key = dateStamp(bj)
+    if (lastCloseFinalizeKey === key) return
+    lastCloseFinalizeKey = key
+    try {
+      await getDashboard({ force: true })
+      console.log(`[rec-ledger] ${key} 收盘定稿完成`)
+    } catch (err) {
+      console.error('[rec-ledger] 收盘定稿失败', err && err.message)
+    }
+  }, 60000)
 })
 
 process.on('SIGINT', () => {

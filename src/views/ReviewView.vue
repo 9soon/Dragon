@@ -1,7 +1,8 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import MarketMood from '../components/MarketMood.vue'
 import { fmtMoney, fmtPct } from '../lib/format'
+import { getRecAudit } from '../lib/api'
 
 const props = defineProps({
   dashboard: { type: Object, required: true }
@@ -30,6 +31,7 @@ const blown = computed(() => review.value.blownTop || [])
 const down = computed(() => review.value.downTop || [])
 const plan = computed(() => review.value.plan || null)
 const planAction = computed(() => (plan.value && plan.value.action) || null)
+const planBlocked = computed(() => !!planAction.value && planAction.value.canAct === 'no')
 const promoRank = computed(() => (plan.value && plan.value.promotionRank) || [])
 const heightWatch = computed(() => (plan.value && plan.value.heightWatch) || [])
 const oneWordWatch = computed(() => (plan.value && plan.value.oneWordWatch) || [])
@@ -52,6 +54,81 @@ const hotshotReady = computed(
 const hotshotWatch = computed(
   () => (hotshot.value && hotshot.value.tomorrow && hotshot.value.tomorrow.watch) || []
 )
+const recAudit = ref(null)
+const recLoading = ref(false)
+const recError = ref('')
+const showAllRecDays = ref(false)
+const recActionable = computed(() => (recAudit.value && recAudit.value.actionable) || {})
+const recWatch = computed(() => (recAudit.value && recAudit.value.watch) || {})
+const recDays = computed(() => (recAudit.value && recAudit.value.days) || [])
+const recDaysShown = computed(() =>
+  showAllRecDays.value ? recDays.value : recDays.value.slice(0, 4)
+)
+const recToday = computed(() => (recAudit.value && recAudit.value.today) || null)
+const recWinTone = computed(() => {
+  const v = recActionable.value.winRate
+  if (v == null) return 'is-flat'
+  return v >= 50 ? 'is-up' : 'is-down'
+})
+const recNoEntryReason = computed(() => {
+  const counts = {}
+  for (const day of recDays.value) {
+    if (!day.actionable) continue
+    for (const row of day.rows || []) {
+      if (row.status !== 'evaluated' || row.trigger === 'trigger') continue
+      counts[row.trigger] = (counts[row.trigger] || 0) + 1
+    }
+  }
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([key, n]) => `${TRIGGER_LABELS[key] || key} ${n}`)
+    .join(' · ')
+})
+
+async function loadRecAudit(force = false) {
+  if (recLoading.value) return
+  recLoading.value = true
+  recError.value = ''
+  try {
+    recAudit.value = await getRecAudit({ days: 10, force })
+  } catch (err) {
+    recError.value = err.message || '核对失败'
+  } finally {
+    recLoading.value = false
+  }
+}
+
+onMounted(() => loadRecAudit())
+
+const TRIGGER_LABELS = {
+  trigger: '触发买点',
+  flatOpen: '平开未触发',
+  lowOpen: '低开未触发',
+  highChase: '偏高未追',
+  abandonGap: '高开放弃',
+  unknown: '待核对'
+}
+
+function triggerLabel(row) {
+  if (row.status === 'pending') return '待次日收盘'
+  if (row.status !== 'evaluated') return '无有效日线'
+  return TRIGGER_LABELS[row.trigger] || '待核对'
+}
+
+function signed(v, suffix = '%') {
+  if (v == null) return '--'
+  return `${v > 0 ? '+' : ''}${v}${suffix}`
+}
+
+function retTone(v) {
+  if (v == null) return 'is-flat'
+  return v > 0 ? 'is-up' : v < 0 ? 'is-down' : 'is-flat'
+}
+
+function shortDate(stamp) {
+  return stamp ? `${stamp.slice(4, 6)}-${stamp.slice(6, 8)}` : '--'
+}
+
 const live = computed(() => props.dashboard.dataMode === 'live')
 const snapshotLabel = computed(() => {
   const d = props.dashboard
@@ -122,6 +199,125 @@ function tierTone(v) {
     </div>
 
     <MarketMood :sentiment="dashboard.sentiment" />
+
+    <section class="section rec-audit-section">
+      <header class="section-head">
+        <span class="section-title">推荐复盘</span>
+        <span class="section-count">近 10 日 · 次日日线核对</span>
+      </header>
+
+      <div class="panel rec-audit">
+        <div v-if="!recAudit && recLoading" class="rec-empty">
+          正在用次日日线核对此前的晋级榜与明日待选…
+        </div>
+        <div v-else-if="!recAudit && recError" class="rec-empty">
+          核对失败：{{ recError }}
+          <button class="rec-retry" type="button" @click="loadRecAudit(true)">重试</button>
+        </div>
+        <template v-else-if="recAudit">
+          <div class="rec-stats">
+            <div class="rec-stat">
+              <small>可执行样本</small>
+              <b>{{ recActionable.evaluated || 0 }}</b>
+              <span>共记录 {{ recActionable.samples || 0 }}</span>
+            </div>
+            <div class="rec-stat">
+              <small>触发买点</small>
+              <b>{{ recActionable.triggered || 0 }}</b>
+              <span>按计划竞价区间</span>
+            </div>
+            <div class="rec-stat">
+              <small>触发胜率</small>
+              <b :class="recWinTone">
+                {{ recActionable.winRate != null ? recActionable.winRate + '%' : '--' }}
+              </b>
+              <span>{{ recActionable.wins || 0 }} 胜 / {{ recActionable.triggered || 0 }}</span>
+            </div>
+            <div class="rec-stat">
+              <small>触发均收益</small>
+              <b :class="retTone(recActionable.avgRet)">{{ signed(recActionable.avgRet) }}</b>
+              <span>开盘→收盘</span>
+            </div>
+            <div class="rec-stat">
+              <small>次日晋级率</small>
+              <b>{{ recActionable.promoRate != null ? recActionable.promoRate + '%' : '--' }}</b>
+              <span>{{ recActionable.promoted || 0 }} / {{ recActionable.evaluated || 0 }} 只</span>
+            </div>
+          </div>
+
+          <p class="rec-caveat">
+            <template v-if="recActionable.triggered && recActionable.triggered < 5">
+              触发样本只有 {{ recActionable.triggered }} 只，只能看方向，不能当稳定胜率。
+            </template>
+            <template v-else-if="!recActionable.triggered && recActionable.evaluated">
+              没有一只按计划竞价区间成交<template v-if="recNoEntryReason">（{{ recNoEntryReason }}）</template>，
+              说明“看对晋级”和“买得到”是两件事。
+            </template>
+            <template v-else-if="!recActionable.evaluated">
+              还没有完成次日的可执行样本；台账只记录复盘明确给出的晋级榜 / 明日待选。
+            </template>
+            <template v-else>
+              触发样本按计划竞价区间买入、当日收盘卖出统计，不按事后最优价假设成交。
+            </template>
+          </p>
+
+          <div v-if="recToday" class="rec-today">
+            今天已记录 {{ recToday.items }} 只（{{ recToday.action && recToday.action.label }}），
+            {{ recToday.final ? '已收盘定稿' : '收盘后定稿' }}，明日收盘后核对结果。
+          </div>
+
+          <div v-if="recWatch.evaluated" class="rec-watch-line">
+            观察窗口（当时计划明确不出手）：{{ recWatch.evaluated }} 只已核对，触发
+            {{ recWatch.triggered }} 只<template v-if="recWatch.winRate != null">
+              ，触发胜率 {{ recWatch.winRate }}%</template
+            >。这些样本不计入上面的可执行胜率。
+          </div>
+
+          <div v-if="recDays.length" class="rec-days">
+            <div v-for="day in recDaysShown" :key="day.date" class="rec-day">
+              <div class="rec-day-head">
+                <b>{{ shortDate(day.date) }}</b>
+                <span class="chip" :class="day.actionable ? 'chip--warn' : 'chip--dim'">
+                  {{ day.actionable ? '可执行' : '只观察' }}
+                </span>
+                <span class="rec-day-action">{{ day.action && day.action.label }}</span>
+                <span class="rec-day-stat">
+                  触发 {{ day.stats.triggered }}/{{ day.stats.evaluated }}
+                  <template v-if="day.stats.winRate != null"> · 胜率 {{ day.stats.winRate }}%</template>
+                </span>
+              </div>
+              <div v-for="row in day.rows" :key="row.code" class="rec-row">
+                <b>{{ row.name }}</b>
+                <span class="rec-code">{{ row.code }}</span>
+                <span>{{ row.lbc }} 板</span>
+                <span :class="retTone(row.gap)">缺口 {{ signed(row.gap) }}</span>
+                <span :class="retTone(row.dayRet)">开→收 {{ signed(row.dayRet) }}</span>
+                <span class="rec-trigger" :class="{ 'is-hit': row.trigger === 'trigger' }">
+                  {{ triggerLabel(row) }}
+                </span>
+                <span v-if="row.promoted" class="chip chip--red">晋级</span>
+                <span v-else-if="row.touchedLimit" class="chip chip--warn">触板未封</span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            v-if="recDays.length > 4"
+            class="rec-toggle"
+            type="button"
+            @click="showAllRecDays = !showAllRecDays"
+          >
+            {{ showAllRecDays ? '收起，只看最近 4 日' : `展开全部 ${recDays.length} 日` }}
+          </button>
+
+          <p class="rec-note">
+            只统计复盘里明确给出的“明日连板晋级榜 / 明日打板待选”，并剔除一字 / 秒板；首页观察池、准备池和预警不计入。
+            触发口径按计划：首板竞价 +1%–4%，连板 +1%–3%；缺口 &gt;5%/6% 或 &lt; -2% 视为未触发，
+            触发样本用次日开盘价近似竞价成交，不按事后最优价假设成交。盘中快照未在收盘后定稿的交易日不纳入统计。
+          </p>
+        </template>
+      </div>
+    </section>
 
     <section v-if="plan" class="section plan-section">
       <header class="section-head">
@@ -202,7 +398,7 @@ function tierTone(v) {
       <div class="promo-panel">
         <div class="promo-head">
           <span>明日连板晋级榜</span>
-          <span>只列前排 · 不含杂毛</span>
+          <span>{{ planBlocked ? '观察窗口 · 不构成买入' : '只列前排 · 不含杂毛' }}</span>
         </div>
         <div v-if="promoRank.length" class="promo-list">
           <div
@@ -257,6 +453,7 @@ function tierTone(v) {
           概率为规则估算与历史校准模型的保守加权；校准只用当日之前样本做走样本外检验，
           达标才启用。它只用于排序与风险过滤，不是胜率；今日一字 / 秒板即使概率高，
           也不等于明天有舒服买点，执行仍看竞价换手。
+          <template v-if="planBlocked">今日计划为不出手，本榜只用于跟踪次日晋级，不是买入清单。</template>
         </p>
       </div>
 
@@ -480,14 +677,15 @@ function tierTone(v) {
         <p>
           把三家公开打法拆成可检查条件：首板要板块效应，二板看缩量与分歧，只做板块龙一；
           没有合格载体就空仓。明日待选只从板块三关全过、且是板块龙一的 1–2 板里取；
-          龙一是 3 板或只过 1–2 关的降为观察。审美分只用于排序，不是胜率；催化未核验前只算待选。
+          今日一字 / 秒板买不到，不进明日待选，只观察竞价换手；龙一是 3 板或只过 1–2 关的降为观察。
+          审美分只用于排序，不是胜率；催化未核验前只算待选。
         </p>
       </div>
 
       <div class="hotshot-panel">
         <div class="promo-head">
           <span>今日审美命中</span>
-          <span>{{ hotshotToday.length }} 只 · 收盘定格 · 只复盘</span>
+          <span>{{ hotshotToday.length }} 只 · 收盘定格 · 只复盘 · 非买入清单</span>
         </div>
         <div v-if="hotshotToday.length" class="hotshot-hits">
           <div v-for="item in hotshotToday" :key="item.code" class="hotshot-hit">
@@ -498,6 +696,7 @@ function tierTone(v) {
                 <span class="promo-board">{{ item.lbc }} 板</span>
                 <span class="promo-sector">{{ item.sector }}</span>
                 <span class="hotshot-score">审美 {{ item.score }}</span>
+                <span v-if="item.oneWord" class="chip chip--warn">一字 / 秒板 · 只复盘</span>
               </div>
               <div class="hotshot-tags">
                 <span v-for="tag in item.tags" :key="tag" class="chip chip--dim">{{ tag }}</span>
@@ -517,7 +716,7 @@ function tierTone(v) {
       <div class="hotshot-panel">
         <div class="promo-head">
           <span>明日打板待选</span>
-          <span>待选 {{ hotshotReady.length }} · 只观察 {{ hotshotWatch.length }}</span>
+          <span>{{ planBlocked ? `计划不出手 · 观察 ${hotshotReady.length + hotshotWatch.length}` : `待选 ${hotshotReady.length} · 只观察 ${hotshotWatch.length}` }}</span>
         </div>
         <div v-if="hotshotReady.length" class="hotshot-ready-list">
           <div v-for="item in hotshotReady" :key="item.code" class="hotshot-ready">
@@ -550,14 +749,15 @@ function tierTone(v) {
               </span>
             </div>
             <p class="hotshot-line">{{ item.why[1] }}</p>
-            <div class="hotshot-entry">
+            <div v-if="!planBlocked" class="hotshot-entry">
               <span>执行条件</span>
               <ul>
                 <li v-for="line in item.entry" :key="line">{{ line }}</li>
               </ul>
             </div>
-            <p class="hotshot-giveup">放弃：{{ item.giveUp }}</p>
-            <p class="hotshot-position">仓位：{{ item.position }}</p>
+            <p v-if="!planBlocked" class="hotshot-giveup">放弃：{{ item.giveUp }}</p>
+            <p v-if="!planBlocked" class="hotshot-position">仓位：{{ item.position }}</p>
+            <p v-else class="hotshot-giveup">今日计划不出手：只记录条件，不给仓位与买点。</p>
             <p v-if="item.risks.length" class="hotshot-risk">
               风险：{{ item.risks.slice(0, 3).join('；') }}
             </p>
@@ -1978,6 +2178,176 @@ function tierTone(v) {
   font-size: 10.6px;
   line-height: 1.6;
   color: var(--muted);
+}
+
+/* ---------- 推荐复盘 ---------- */
+
+.rec-stats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--line);
+}
+
+.rec-stat {
+  grid-column: span 2;
+  padding: 11px 12px;
+  background: rgba(10, 14, 22, 0.72);
+}
+
+.rec-stat:nth-child(n + 4) {
+  grid-column: span 3;
+}
+
+.rec-stat small {
+  display: block;
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.rec-stat b {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 18px;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.rec-stat span {
+  display: block;
+  margin-top: 2px;
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.rec-caveat {
+  margin: 0;
+  padding: 10px 14px 0;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--warn);
+}
+
+.rec-today,
+.rec-watch-line {
+  margin: 8px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 180, 94, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 180, 94, 0.045);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.rec-watch-line {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.rec-days {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.rec-day {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.rec-day-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 7px;
+  padding: 9px 14px 7px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.rec-day-head > b {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.rec-day-action {
+  color: var(--dim);
+}
+
+.rec-day-stat {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.rec-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 7px 14px 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.05);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.rec-row > b {
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+
+.rec-code {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.rec-trigger {
+  color: var(--dim);
+}
+
+.rec-trigger.is-hit {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.rec-toggle,
+.rec-retry {
+  display: block;
+  width: calc(100% - 28px);
+  margin: 9px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.rec-retry {
+  display: inline-block;
+  width: auto;
+  margin: 6px 0 0;
+  color: var(--gold);
+}
+
+.rec-empty {
+  padding: 14px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.rec-note {
+  margin: 0;
+  padding: 10px 14px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--dim);
 }
 
 @media (max-width: 370px) {
