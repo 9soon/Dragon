@@ -3120,8 +3120,18 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
   const tradeDate = latest ? latest.date : dashboard.tradeDate
   /* 预警榜不看综合分前五：只看“未封板、还能买”的合格票，按预警分从强到弱 */
   const alertBoard = buildAlertBoard(strong, { stage, tradeDate, now })
+  const alertFunnel = buildAlertFunnel(strong, alertBoard, { stage })
   const alertBoardReady =
     ['locked', 'final', 'intraday'].includes(stage.key) && !stage.frozen
+  if (['locked', 'final', 'intraday'].includes(stage.key)) {
+    persistAlertDiagnostics({
+      alertFunnel,
+      alertBoard,
+      stage,
+      tradeDate,
+      boardReady: alertBoardReady
+    })
+  }
 
   const notes = [stage.note]
   if (stage.intraday) {
@@ -3172,6 +3182,7 @@ async function buildAuction({ dashboard, profile = null, now = beijingNow() }) {
     watchCount,
     candidates: top,
     alertBoard,
+    alertFunnel,
     alertBoardReady,
     preview: [],
     notes,
@@ -3202,6 +3213,78 @@ const ALERT_STAGE_KEYS = ['locked', 'final', 'intraday']
 const ALERT_FIRST_SEEN = new Map()
 const ALERT_FIRST_SEEN_LIMIT = 400
 let alertFirstSeenDate = ''
+const ALERT_DIAG_FILE = path.join(__dirname, '..', '.cache', 'alert-diagnostics.json')
+const ALERT_POLL_FILE = path.join(__dirname, '..', '.cache', 'alert-polls.json')
+let alertDiagPersistAt = 0
+let alertPollState = null
+let alertPollPersistAt = 0
+
+/* 把每一轮预警漏斗落盘，方便盘后回答“为什么没弹” */
+function persistAlertDiagnostics({ alertFunnel, alertBoard, stage, tradeDate, boardReady }) {
+  const now = Date.now()
+  if (now - alertDiagPersistAt < 30000) return
+  alertDiagPersistAt = now
+  try {
+    fs.mkdirSync(path.dirname(ALERT_DIAG_FILE), { recursive: true })
+    fs.writeFileSync(
+      ALERT_DIAG_FILE,
+      JSON.stringify(
+        {
+          updatedAt: new Date().toISOString(),
+          tradeDate: tradeDate || '',
+          stage: stage ? { key: stage.key, label: stage.label, frozen: !!stage.frozen } : null,
+          boardReady: !!boardReady,
+          funnel: alertFunnel || null,
+          board: (alertBoard || []).map((x) => ({
+            code: x.code,
+            name: x.name,
+            pct: x.pct,
+            alertScore: x.alertScore,
+            geneScore: x.geneScore,
+            recommendTime: x.recommendTime
+          }))
+        },
+        null,
+        2
+      ),
+      'utf8'
+    )
+  } catch (err) {
+    /* 诊断写入失败不影响预警 */
+  }
+}
+
+/* 记录页面是否在轮询 /api/alerts；用来区分“没票”与“页面没开” */
+function recordAlertPoll(payload, result) {
+  const now = Date.now()
+  const date = (payload && payload.tradeDate) || ''
+  if (!alertPollState || alertPollState.date !== date) {
+    alertPollState = {
+      date,
+      count: 0,
+      firstAt: new Date().toISOString(),
+      lastAt: '',
+      lastStage: '',
+      lastStageLabel: '',
+      lastWindowOpen: false,
+      lastBoard: 0
+    }
+  }
+  alertPollState.count++
+  alertPollState.lastAt = new Date().toISOString()
+  alertPollState.lastStage = result && result.stage ? result.stage.key : ''
+  alertPollState.lastStageLabel = result && result.stage ? result.stage.label : ''
+  alertPollState.lastWindowOpen = !!(result && result.window && result.window.open)
+  alertPollState.lastBoard = result ? result.count || 0 : 0
+  if (now - alertPollPersistAt < 15000) return
+  alertPollPersistAt = now
+  try {
+    fs.mkdirSync(path.dirname(ALERT_POLL_FILE), { recursive: true })
+    fs.writeFileSync(ALERT_POLL_FILE, JSON.stringify(alertPollState, null, 2), 'utf8')
+  } catch (err) {
+    /* 诊断写入失败不影响预警 */
+  }
+}
 
 /* 同一个交易日同一代码只记第一次进入预警榜的时间，页面刷新不重写 */
 function alertFirstSeenOf(tradeDate, code, now) {
@@ -3267,25 +3350,39 @@ function auctionAlertScore(x, intraday = false) {
 }
 
 function auctionAlertEligible(x, intraday = false) {
-  if (!x || !x.code) return false
+  return auctionAlertReject(x, intraday) == null
+}
+
+/* 与 eligible 同一口径，但返回“卡在哪一关”，用于每日空榜诊断 */
+function auctionAlertReject(x, intraday = false) {
+  if (!x || !x.code) return '无代码'
   /* 20cm 直接不提醒：科创板 688/689、创业板 300/301 */
-  if (is20cmCode(x.code)) return false
-  if (x.status !== 'watch' && x.status !== 'confirm') return false
+  if (is20cmCode(x.code)) return '双创 20cm'
+  if (x.status !== 'watch' && x.status !== 'confirm') return '未入强势候选'
   /* 已封板 / 贴涨停的票直接排除：提醒时已经买不进 */
-  if (x.sealed) return false
-  if (x.gapToLimit == null || num(x.gapToLimit, 0) <= ALERT_MIN_GAP) return false
+  if (x.sealed) return '已封板 / 买不进'
+  if (x.gapToLimit == null) return '距涨停未知'
+  if (num(x.gapToLimit, 0) <= ALERT_MIN_GAP) return `距涨停 ${num(x.gapToLimit, 0)} 点，买不进`
   const pct = num(x.pct, null)
-  if (pct == null || pct < ALERT_MIN_PCT || pct > ALERT_MAX_PCT) return false
-  if (num(x.geneScore, 0) < ALERT_MIN_GENE) return false
+  if (pct == null) return '涨幅缺失'
+  if (pct < ALERT_MIN_PCT) return `涨幅 ${round(pct, 2)}% 低于 ${ALERT_MIN_PCT}%`
+  if (pct > ALERT_MAX_PCT) return `涨幅 ${round(pct, 2)}% 高于 ${ALERT_MAX_PCT}%`
+  if (num(x.geneScore, 0) < ALERT_MIN_GENE) {
+    return `基因 ${Math.round(num(x.geneScore, 0))} < ${ALERT_MIN_GENE}`
+  }
   /* 三板组核按钮高风险不提醒：缩量小盘加速到 3–4 板，撤单砸盘风险不可控 */
-  if (x.nuclearLevel === 'high') return false
+  if (x.nuclearLevel === 'high') return '核按钮高风险'
   /* 板块三关通过，或板块涨停 ≥5 家，二者至少满足一项 */
-  if (!x.sectorReady && num(x.sectorTodayCount, 0) < 5) return false
+  if (!x.sectorReady && num(x.sectorTodayCount, 0) < 5) return '板块未过三关且涨停 <5 家'
   /* 成交额缺失时不臆造；一旦有数据，必须过流动性门槛 */
-  if (x.amount != null && num(x.amount, 0) < 2e7) return false
-  if (!intraday && x.amountRatio != null && num(x.amountRatio, 0) < 2) return false
-  if (intraday && x.volRatio != null && num(x.volRatio, 0) < 1) return false
-  return true
+  if (x.amount != null && num(x.amount, 0) < 2e7) return '成交额 <2000 万'
+  if (!intraday && x.amountRatio != null && num(x.amountRatio, 0) < 2) {
+    return `竞价额占昨日成交 ${round(num(x.amountRatio, 0), 1)}% <2%`
+  }
+  if (intraday && x.volRatio != null && num(x.volRatio, 0) < 1) {
+    return `量比 ${round(num(x.volRatio, 0), 2)} <1.0`
+  }
+  return null
 }
 
 function alertStatusLabel(stageKey) {
@@ -3362,6 +3459,83 @@ function buildAlertBoard(items, { stage, tradeDate, now }) {
         lastSeenTime: stampTime
       }
     })
+}
+
+/* 空榜也要说清原因：统计每个候选卡在哪一关，并给出最接近的 3 只 */
+function alertRejectGroup(reason) {
+  if (!reason) return ''
+  if (reason.startsWith('涨幅') && reason.includes('低于')) return '涨幅低于 2%'
+  if (reason.startsWith('涨幅') && reason.includes('高于')) return '涨幅高于 8%'
+  if (reason.startsWith('距涨停')) return '距涨停太近 / 买不进'
+  if (reason.startsWith('基因')) return '基因不足'
+  if (reason.includes('板块')) return '板块未共振'
+  if (reason.startsWith('竞价额')) return '竞价额占比不足'
+  if (reason.startsWith('量比')) return '量比不足'
+  if (reason.startsWith('预警分')) return '预警分不足'
+  return reason
+}
+
+function buildAlertFunnel(items, board, { stage } = {}) {
+  const stageKey = (stage && stage.key) || 'off'
+  const intraday = stageKey === 'intraday'
+  const list = Array.isArray(items) ? items : []
+  const pool = list.filter((x) => x && (x.status === 'watch' || x.status === 'confirm'))
+  const boardCodes = new Set((board || []).map((x) => x.code))
+  const counts = new Map()
+  if (list.length > pool.length) {
+    counts.set('未入强势候选', list.length - pool.length)
+  }
+  const near = []
+  let eligible = 0
+  for (const x of pool) {
+    if (!x || !x.code) continue
+    const reason = auctionAlertReject(x, intraday)
+    const alertScore = auctionAlertScore(x, intraday)
+    if (!reason) {
+      eligible++
+      if (alertScore < ALERT_SCORE_THRESHOLD) {
+        const r = `预警分 ${alertScore} < ${ALERT_SCORE_THRESHOLD}`
+        const key = alertRejectGroup(r)
+        counts.set(key, (counts.get(key) || 0) + 1)
+        near.push({
+          code: x.code,
+          name: x.name,
+          pct: x.pct,
+          geneScore: x.geneScore,
+          alertScore,
+          reason: r
+        })
+      }
+      continue
+    }
+    const key = alertRejectGroup(reason)
+    counts.set(key, (counts.get(key) || 0) + 1)
+    near.push({
+      code: x.code,
+      name: x.name,
+      pct: x.pct,
+      geneScore: x.geneScore,
+      alertScore,
+      reason
+    })
+  }
+  return {
+    stageKey,
+    universe: list.length,
+    candidates: pool.length,
+    eligible,
+    board: boardCodes.size,
+    threshold: ALERT_SCORE_THRESHOLD,
+    minGene: ALERT_MIN_GENE,
+    counts: Array.from(counts.entries())
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
+      .slice(0, 6),
+    nearMiss: near
+      .filter((x) => !boardCodes.has(x.code))
+      .sort((a, b) => b.alertScore - a.alertScore || b.geneScore - a.geneScore)
+      .slice(0, 3)
+  }
 }
 
 function auctionAlertWindow(stage) {
@@ -3450,7 +3624,7 @@ function buildAuctionAlerts(payload) {
     '预警是条件触发，不是买入指令；封板后自动移出推荐榜，只能排队观察；催化未核验或板块三关未过只按观察展示。'
   )
 
-  return {
+  const result = {
     ok: true,
     generatedAt: p.generatedAt || new Date().toISOString(),
     quoteAt: p.quoteAt || null,
@@ -3469,8 +3643,11 @@ function buildAuctionAlerts(payload) {
     boardCount: board.length,
     items,
     board,
+    funnel: p.alertFunnel || null,
     notes
   }
+  recordAlertPoll(p, result)
+  return result
 }
 
 /* ------------------------------------------------------------------ *

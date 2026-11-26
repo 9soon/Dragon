@@ -777,6 +777,25 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
+    /* 只读留痕：页面没轮询 / 午间冻结 / 事后复诊时，仍能回答“为什么没弹” */
+    if (pathname === '/api/alert-diagnostics') {
+      const readCache = (file) => {
+        try {
+          return JSON.parse(fs.readFileSync(path.join(CACHE_DIR, file), 'utf8'))
+        } catch (err) {
+          return null
+        }
+      }
+      sendJson(res, 200, {
+        ok: true,
+        generatedAt: new Date().toISOString(),
+        market: marketStatus(),
+        diagnostics: readCache('alert-diagnostics.json'),
+        polls: readCache('alert-polls.json')
+      })
+      return
+    }
+
     if (pathname === '/api/overnight') {
       const dashboard = await getDashboard()
       const data = buildOvernight({ dashboard, profile: peekDragonProfile() })
@@ -894,6 +913,54 @@ server.listen(PORT, '0.0.0.0', () => {
   setInterval(() => {
     ensurePromotionCalibration().catch(() => null)
   }, 1000 * 60 * 60 * 3)
+  /* 竞价窗口每分钟留一份快照：即使页面没开，盘后也能回答“为什么没弹” */
+  let lastAuctionSnapshotKey = ''
+  const snapshotAuctionWindow = async () => {
+    const market = marketStatus()
+    if (!['auction', 'waiting'].includes(market.key)) return
+    const bj = beijingNow()
+    const key = `${dateStamp(bj)}-${hhmm(bj).slice(0, 5).replace(':', '')}`
+    if (lastAuctionSnapshotKey === key) return
+    lastAuctionSnapshotKey = key
+    try {
+      const auction = await getSharedAuction()
+      const dir = path.join(CACHE_DIR, 'auction-snapshots')
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(
+        path.join(dir, `${key}.json`),
+        JSON.stringify(
+          {
+            capturedAt: new Date().toISOString(),
+            date: auction.tradeDate,
+            stage: auction.stage,
+            boardReady: auction.alertBoardReady,
+            alertBoard: auction.alertBoard,
+            alertFunnel: auction.alertFunnel,
+            candidates: (auction.candidates || []).slice(0, 8).map((x) => ({
+              code: x.code,
+              name: x.name,
+              pct: x.pct,
+              status: x.status,
+              score: x.score,
+              geneScore: x.geneScore,
+              amount: x.amount,
+              amountRatio: x.amountRatio,
+              sector: x.sector,
+              sectorReady: x.sectorReady,
+              sectorTodayCount: x.sectorTodayCount,
+              nuclearLevel: x.nuclearLevel
+            }))
+          },
+          null,
+          2
+        ),
+        'utf8'
+      )
+    } catch (err) {
+      console.error('[auction-snapshot]', err && err.message)
+    }
+  }
+  setInterval(snapshotAuctionWindow, 15000)
 })
 
 process.on('SIGINT', () => {

@@ -1,5 +1,6 @@
 import { reactive, computed } from 'vue'
 import { catalystType, getCatalyst, isCatalystValid } from './catalysts'
+import { getAlertDiagnostics } from './api'
 
 const SETTINGS_KEY = 'longmai.alerts.settings.v1'
 const HISTORY_KEY = 'longmai.alerts.history.v1'
@@ -93,6 +94,9 @@ export const alertState = reactive({
   centerOpen: false,
   windowOpen: false,
   windowKey: '',
+  funnel: null,
+  diagnostics: null,
+  diagnosticsAt: 0,
   lastCheckAt: 0,
   lastError: '',
   seeded: false
@@ -586,6 +590,32 @@ function refreshCatalystStates() {
   if (changed) persistHistory()
 }
 
+/* 只读服务端留痕：午间冻结 / 页面没开 / 收盘后复盘也能看到最近一轮漏斗 */
+let diagPromise = null
+export function refreshAlertDiagnostics() {
+  if (diagPromise) return diagPromise
+  diagPromise = (async () => {
+    try {
+      const data = await getAlertDiagnostics()
+      if (data && data.diagnostics) {
+        alertState.diagnostics = {
+          ...data.diagnostics,
+          polls: data.polls || null,
+          fetchedAt: Date.now()
+        }
+      } else {
+        alertState.diagnostics = null
+      }
+      alertState.diagnosticsAt = Date.now()
+    } catch (e) {
+      /* 留痕读取失败不影响实时预警 */
+    } finally {
+      diagPromise = null
+    }
+  })()
+  return diagPromise
+}
+
 export function evaluateAlerts(payload) {
   if (!payload || payload.ok === false) return
   alertState.lastCheckAt = Date.now()
@@ -593,6 +623,7 @@ export function evaluateAlerts(payload) {
   refreshCatalystStates()
   alertState.windowOpen = !!(payload.active && payload.window && payload.window.open)
   alertState.windowKey = payload.window ? payload.window.key || '' : ''
+  alertState.funnel = payload.funnel || null
   if (!payload.active) return
 
   /* 推荐榜与弹窗分开：即使弹窗关闭，当天推荐记录也能继续保留 */

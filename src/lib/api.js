@@ -64,6 +64,11 @@ export function getAlerts() {
   return request('/api/alerts', { timeout: 12000 })
 }
 
+/* 只读服务端留痕，不触发重新扫描；用于午间 / 收盘后回答“为什么没弹” */
+export function getAlertDiagnostics() {
+  return request('/api/alert-diagnostics', { timeout: 6000 })
+}
+
 export function getOvernight() {
   return request('/api/overnight', { timeout: 18000 })
 }

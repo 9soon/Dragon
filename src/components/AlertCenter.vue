@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import BottomSheet from './BottomSheet.vue'
 import AlertRecommendations from './AlertRecommendations.vue'
 import { fmtNum, fmtPct, pctTone } from '../lib/format'
@@ -11,6 +11,7 @@ import {
   closeAlertCenter,
   desktopPermission,
   desktopSupported,
+  refreshAlertDiagnostics,
   requestDesktopPermission,
   testAlert,
   updateAlertSettings
@@ -26,6 +27,49 @@ const clearArmed = ref(false)
 let clearTimer = null
 
 const history = computed(() => alertState.history || [])
+
+const stampFmt = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false
+})
+
+function stampText(value) {
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return stampFmt.format(d)
+}
+
+const lastCheckText = computed(() =>
+  alertState.lastCheckAt ? stampText(alertState.lastCheckAt) : ''
+)
+
+/* 页面没轮询时用服务端留痕补位：午间冻结 / 收盘后仍能解释为什么没弹 */
+const savedDiag = computed(() => {
+  const d = alertState.diagnostics
+  return d && d.funnel ? d : null
+})
+const savedTime = computed(() => stampText(savedDiag.value && savedDiag.value.updatedAt))
+const savedDate = computed(() => {
+  const raw = String((savedDiag.value && savedDiag.value.tradeDate) || '')
+  return raw.length === 8 ? `${raw.slice(4, 6)}-${raw.slice(6, 8)}` : ''
+})
+const savedPolls = computed(() => {
+  const p = savedDiag.value && savedDiag.value.polls
+  if (!p || !p.count) return ''
+  return `页面轮询 ${p.count} 次，最近 ${stampText(p.lastAt)}`
+})
+
+watch(
+  () => props.open,
+  (open) => {
+    if (open) refreshAlertDiagnostics()
+  },
+  { immediate: true }
+)
 
 const desktopLabel = computed(() => {
   if (!desktopSupported()) return '浏览器不支持'
@@ -170,6 +214,79 @@ function verify(item) {
     </div>
 
     <AlertRecommendations compact :live="alertState.windowOpen" />
+
+    <div
+      v-if="alertState.funnel && (alertState.funnel.candidates || alertState.windowOpen)"
+      class="ac-funnel"
+    >
+      <div class="ac-funnel-head">
+        <span>
+          本轮 {{ alertState.funnel.candidates }} 只强势候选 / 扫描 {{ alertState.funnel.universe }} 只
+          <small v-if="lastCheckText">· {{ lastCheckText }}</small>
+        </span>
+        <span :class="{ 'is-none': !alertState.funnel.board }">
+          {{ alertState.funnel.board ? `达标 ${alertState.funnel.board} 只` : '本轮 0 只达标' }}
+        </span>
+      </div>
+      <div v-if="alertState.funnel.counts && alertState.funnel.counts.length" class="ac-funnel-counts">
+        <span v-for="c in alertState.funnel.counts" :key="c.reason">
+          {{ c.reason }} {{ c.count }}
+        </span>
+      </div>
+      <div v-if="!alertState.funnel.candidates" class="ac-funnel-empty">
+        本轮没有进入强势候选的票：可能是涨幅 / 成交不够，或数据源未返回；不会为了凑数放宽条件。
+      </div>
+      <div
+        v-else-if="alertState.funnel.nearMiss && alertState.funnel.nearMiss.length"
+        class="ac-funnel-near"
+      >
+        <div v-for="n in alertState.funnel.nearMiss" :key="n.code" class="ac-funnel-row">
+          <b>{{ n.name }}</b>
+          <span v-if="n.pct != null" class="mono">{{ n.pct > 0 ? '+' : '' }}{{ n.pct }}%</span>
+          <span class="mono">预警分 {{ n.alertScore }}</span>
+          <em>{{ n.reason }}</em>
+        </div>
+      </div>
+      <p class="ac-funnel-note">
+        漏斗按未封板、距涨停 &gt;0.3 点、涨幅 +2% ~ +8%、基因 ≥65、板块共振、成交额与预警分
+        ≥70 逐关检查；空榜也是有效结果。
+      </p>
+    </div>
+
+    <div v-else-if="savedDiag" class="ac-funnel ac-funnel--saved">
+      <div class="ac-funnel-head">
+        <span>
+          服务端留痕 {{ savedDate }} {{ savedTime }} · {{ savedDiag.funnel.candidates }} 只强势候选
+        </span>
+        <span :class="{ 'is-none': !savedDiag.funnel.board }">
+          {{ savedDiag.funnel.board ? `达标 ${savedDiag.funnel.board} 只` : '0 只达标' }}
+        </span>
+      </div>
+      <div v-if="savedDiag.funnel.counts && savedDiag.funnel.counts.length" class="ac-funnel-counts">
+        <span v-for="c in savedDiag.funnel.counts" :key="c.reason">
+          {{ c.reason }} {{ c.count }}
+        </span>
+      </div>
+      <div v-if="!savedDiag.funnel.candidates" class="ac-funnel-empty">
+        留痕时没有进入强势候选的票：可能是涨幅 / 成交不够，或数据源未返回；不会为了凑数放宽条件。
+      </div>
+      <div
+        v-else-if="savedDiag.funnel.nearMiss && savedDiag.funnel.nearMiss.length"
+        class="ac-funnel-near"
+      >
+        <div v-for="n in savedDiag.funnel.nearMiss" :key="n.code" class="ac-funnel-row">
+          <b>{{ n.name }}</b>
+          <span v-if="n.pct != null" class="mono">{{ n.pct > 0 ? '+' : '' }}{{ n.pct }}%</span>
+          <span class="mono">预警分 {{ n.alertScore }}</span>
+          <em>{{ n.reason }}</em>
+        </div>
+      </div>
+      <p class="ac-funnel-note">
+        页面当前没有实时轮询（午间冻结、休市或页面未打开），这里展示服务端最后一次留痕。
+        <template v-if="savedPolls">{{ savedPolls }}。</template>
+        留痕只解释筛选过程，不代表当前价格；下一轮轮询后以实时榜单为准。
+      </p>
+    </div>
 
     <header class="ac-list-head">
       <span class="section-title">触发记录</span>
@@ -394,6 +511,98 @@ function verify(item) {
 
 .ac-actions .btn {
   flex: 1;
+}
+
+.ac-funnel {
+  margin: 10px 0 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.ac-funnel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ac-funnel-head .is-none {
+  color: var(--warn);
+}
+
+.ac-funnel-head small {
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.ac-funnel--saved {
+  border-style: dashed;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.ac-funnel-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.ac-funnel-counts span {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.ac-funnel-near {
+  margin-top: 7px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.07);
+}
+
+.ac-funnel-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.05);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.ac-funnel-row:first-child {
+  border-top: 0;
+}
+
+.ac-funnel-row b {
+  font-size: 11.5px;
+  color: var(--text-soft);
+}
+
+.ac-funnel-row em {
+  margin-left: auto;
+  font-style: normal;
+  color: var(--warn);
+  text-align: right;
+}
+
+.ac-funnel-empty {
+  margin-top: 7px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--warn);
+}
+
+.ac-funnel-note {
+  margin: 7px 0 0;
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--dim);
 }
 
 .ac-list-head {
