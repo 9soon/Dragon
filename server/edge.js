@@ -3232,6 +3232,13 @@ const ALERT_MAX_ITEMS = 1
 const ALERT_BOARD_SIZE = 3
 const ALERT_STAGE_KEYS = ['locked', 'final', 'intraday']
 
+/* 竞价高置信：比预警门槛更严的规则层，只用于盘前 9:20–9:30。
+ * 这不是回测胜率，竞价也没有权威历史可回测；它只减少“看起来强但买不到 / 孤军 / 高开追高”的样本。 */
+const ALERT_HIGH_SCORE = 78
+const ALERT_HIGH_MIN_GENE = 70
+const ALERT_HIGH_MAX_PCT = 7
+const ALERT_HIGH_MIN_AMOUNT_RATIO = 3
+
 const ALERT_FIRST_SEEN = new Map()
 const ALERT_FIRST_SEEN_LIMIT = 400
 let alertFirstSeenDate = ''
@@ -3375,6 +3382,20 @@ function auctionAlertEligible(x, intraday = false) {
   return auctionAlertReject(x, intraday) == null
 }
 
+/* 盘前高置信：硬条件全部满足且竞价确认，才配“高置信”标签。
+ * 盘中不标高置信，避免把“接近涨停但未封”当成确定性。 */
+function auctionHighConfidence(x, intraday = false) {
+  if (intraday) return false
+  if (!auctionAlertEligible(x, false)) return false
+  if (x.status !== 'confirm' || !x.auctionHard) return false
+  if (!x.sectorReady) return false
+  if (x.nuclearLevel === 'high' || x.nuclearLevel === 'mid') return false
+  if (num(x.geneScore, 0) < ALERT_HIGH_MIN_GENE) return false
+  if (num(x.pct, null) == null || num(x.pct, 0) > ALERT_HIGH_MAX_PCT) return false
+  if (x.amountRatio != null && num(x.amountRatio, 0) < ALERT_HIGH_MIN_AMOUNT_RATIO) return false
+  return auctionAlertScore(x, false) >= ALERT_HIGH_SCORE
+}
+
 /* 与 eligible 同一口径，但返回“卡在哪一关”，用于每日空榜诊断 */
 function auctionAlertReject(x, intraday = false) {
   if (!x || !x.code) return '无代码'
@@ -3455,6 +3476,7 @@ function buildAlertBoard(items, { stage, tradeDate, now }) {
       volRatio: x.volRatio,
       score: x.score,
       alertScore: auctionAlertScore(x, intraday),
+      confidence: auctionHighConfidence(x, intraday) ? 'high' : 'standard',
       geneScore: x.geneScore,
       nodeLabel: x.nodeLabel,
       nodeTone: x.nodeTone,
@@ -3469,7 +3491,12 @@ function buildAlertBoard(items, { stage, tradeDate, now }) {
       source: x.source || ''
     }))
     .filter((x) => x.alertScore >= ALERT_SCORE_THRESHOLD)
-    .sort((a, b) => b.alertScore - a.alertScore || b.score - a.score)
+    .sort(
+      (a, b) =>
+        (b.confidence === 'high' ? 1 : 0) - (a.confidence === 'high' ? 1 : 0) ||
+        b.alertScore - a.alertScore ||
+        b.score - a.score
+    )
     .slice(0, ALERT_BOARD_SIZE)
     .map((x) => {
       const seen = alertFirstSeenOf(tradeDate, x.code, stamp)
@@ -3638,7 +3665,10 @@ function buildAuctionAlerts(payload) {
     )
   }
   notes.push(
-    `推荐榜最多 ${ALERT_BOARD_SIZE} 只，按预警分从强到弱；每轮最多弹 ${ALERT_MAX_ITEMS} 只，避免刷屏。`
+    `推荐榜最多 ${ALERT_BOARD_SIZE} 只，高置信优先，同层按预警分从强到弱；每轮最多弹 ${ALERT_MAX_ITEMS} 只，避免刷屏。`
+  )
+  notes.push(
+    `盘前高置信只认：竞价确认、板块三关通过、基因 ≥${ALERT_HIGH_MIN_GENE}、涨幅 ≤${ALERT_HIGH_MAX_PCT}%、竞价额 ≥ 昨日成交 ${ALERT_HIGH_MIN_AMOUNT_RATIO}%、预警分 ≥${ALERT_HIGH_SCORE}，且没有防核按钮 / 核按钮风险；这是更严的规则层，不是历史准确率。`
   )
   notes.push('同一代码每天最多弹一次；推荐与预警时间保存在浏览器本地，刷新页面不会清空。')
   notes.push('剔除科创板 688/689、创业板 300/301 的 20cm。')
@@ -3663,6 +3693,7 @@ function buildAuctionAlerts(payload) {
     boardReady,
     count: items.length,
     boardCount: board.length,
+    highConfidenceCount: board.filter((x) => x.confidence === 'high').length,
     items,
     board,
     funnel: p.alertFunnel || null,
@@ -3694,6 +3725,7 @@ function overnightMode(market) {
 }
 
 function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
+  const OVERNIGHT_TOP_N = 3
   const market = marketStatus(now)
   const mode = overnightMode(market)
   const phaseKey = dashboard.sentiment ? dashboard.sentiment.phaseKey : null
@@ -3786,6 +3818,8 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       clamp(0.5 * baseScore + 0.3 * gene.score + 0.2 * heat, 0, 99)
     )
     const sectorReady = !!(sectorObj && sectorObj.dataReady)
+    /* 今日一字 / 秒板明天大概率高开，隔夜单很难按舒服区间成交；留作观察，不进三强 */
+    const tradableBoard = isTradableBoard(stock)
     const acceptable =
       sectorReady &&
       gene.fit.score >= 55 &&
@@ -3805,6 +3839,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     if (stock.lbc === 2) tags.push('二板确认')
     if (stock.lbc >= 4) tags.push('高位加速')
     if (stock.blowCount > 0) tags.push('炸板瑕疵')
+    if (!tradableBoard) tags.push('今日一字 / 秒板')
     tags.push(core.label)
     if (node.tone === 'risk') tags.push('节点风险')
     if (core.strongSeal) tags.push('强封核心')
@@ -3854,6 +3889,9 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
         ...(gene.risks || []),
         ...(node.risks || []),
         ...(stock.blowCount > 0 ? [`昨日炸板 ${stock.blowCount} 次`] : []),
+        ...(tradableBoard
+          ? []
+          : ['今日一字 / 秒板，次日只能等竞价换手；不给舒服区间就不进隔夜三强']),
         ...(stock.lbc >= 5 ? ['高位连板，分歧波动放大'] : []),
         ...(core.mid ? ['容量中军，短线弹性弱于小盘核心'] : []),
         ...(core.label === '高位分歧' ? ['高位分歧，次日只观察不接力'] : []),
@@ -3902,6 +3940,7 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
       factors: gene.factors,
       sectorHeat: heat,
       dataReady: sectorReady,
+      tradableBoard,
       observation: !acceptable,
       acceptable,
       weak: stock.weak || gene.weak || null,
@@ -3930,7 +3969,17 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
         b.nodeScore - a.nodeScore
     )
 
-  const recommendations = allItems.filter((x) => x.acceptable).slice(0, 5)
+  /* 盘后复盘口径：只留硬条件通过且今日可成交的最强 3 只，按隔夜分排序；
+   * 今日一字 / 秒板不进三强，避免再出现“推了但买不到”。 */
+  const recommendations = allItems
+    .filter((x) => x.acceptable && x.tradableBoard)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        b.prepScore - a.prepScore ||
+        b.nodeScore - a.nodeScore
+    )
+    .slice(0, OVERNIGHT_TOP_N)
   const preparation = allItems
     .filter((x) => x.prepScore >= 40)
     .slice(0, 5)
@@ -3959,6 +4008,8 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     '流通市值看 50–120 亿的短线弹性区；200 亿以上按中军处理，500 亿以上降权。',
     '弱转强优先：跌停反包 / 炸板回封 / 烂板转强 > 连板晋级 > 新晋首板。',
     '只做板块核心，不做杂毛补涨；没有催化核验的标的不进入计划。',
+    '盘后只留最强 3 只，按隔夜分排序；严格候选不足 3 只就空着，不用弱票凑数。',
+    '今日一字 / 秒板不进隔夜三强：次日只能看竞价换手，不给舒服区间就不挂。',
     '剔除科创板 688/689、创业板 300/301 的 20cm；它们不进入隔夜推荐与准备池，避免和 10cm 打板纪律混用。',
     '竞价高开 1%–4% 才执行；高开超过 6% 放弃，低开超过 -2% 放弃。',
     '单票 ≤ 10%，隔夜总仓 ≤ 30%；次日竞价不及预期先撤单，不摊低成本。',
@@ -3981,6 +4032,8 @@ function buildOvernight({ dashboard, profile = null, now = beijingNow() }) {
     },
     nodeBoard: buildNodeBoard(dashboard.sentiment),
     dataReady,
+    topN: OVERNIGHT_TOP_N,
+    plan: basePlan,
     recommendations,
     preparation,
     watchlist,

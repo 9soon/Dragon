@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import MarketMood from '../components/MarketMood.vue'
-import { fmtMoney, fmtPct } from '../lib/format'
+import { fmtMoney, fmtPct, fmtPrice } from '../lib/format'
 import { getRecAudit } from '../lib/api'
 
 const props = defineProps({
@@ -53,6 +53,22 @@ const hotshotReady = computed(
 )
 const hotshotWatch = computed(
   () => (hotshot.value && hotshot.value.tomorrow && hotshot.value.tomorrow.watch) || []
+)
+const overnightBrief = computed(() => props.dashboard.overnightBrief || null)
+const overnightTop = computed(() =>
+  ((overnightBrief.value && overnightBrief.value.recommendations) || []).slice(0, 3)
+)
+const overnightModeKey = computed(
+  () => (overnightBrief.value && overnightBrief.value.mode && overnightBrief.value.mode.key) || ''
+)
+const overnightFinal = computed(() => overnightModeKey.value === 'final')
+const overnightModeLabel = computed(
+  () =>
+    ({
+      final: '盘后定稿',
+      preview: '盘中预演',
+      locked: '盘前不追加'
+    })[overnightModeKey.value] || '隔夜计划'
 )
 const recAudit = ref(null)
 const recLoading = ref(false)
@@ -127,6 +143,10 @@ function retTone(v) {
 
 function shortDate(stamp) {
   return stamp ? `${stamp.slice(4, 6)}-${stamp.slice(6, 8)}` : '--'
+}
+
+function nightTags(c) {
+  return Array.from(new Set((c && c.tags) || [])).slice(0, 4)
 }
 
 const live = computed(() => props.dashboard.dataMode === 'live')
@@ -316,6 +336,66 @@ function tierTone(v) {
             触发样本用次日开盘价近似竞价成交，不按事后最优价假设成交。盘中快照未在收盘后定稿的交易日不纳入统计。
           </p>
         </template>
+      </div>
+    </section>
+
+    <section v-if="overnightBrief" class="section night-section">
+      <header class="section-head">
+        <span class="section-title">隔夜三强</span>
+        <span class="section-count">{{ overnightModeLabel }} · 最多 3 只 · 按隔夜分</span>
+      </header>
+
+      <div class="panel night-panel">
+        <div class="night-head">
+          <span class="chip" :class="overnightFinal ? 'chip--gold' : 'chip--dim'">
+            {{ overnightBrief.statusLabel }}
+          </span>
+          <p>{{ overnightBrief.reason }}</p>
+        </div>
+
+        <div v-if="overnightTop.length" class="night-list">
+          <article v-for="(c, i) in overnightTop" :key="c.code" class="night-row">
+            <span class="night-rank">{{ i + 1 }}</span>
+            <div class="night-body">
+              <div class="night-name">
+                <b>{{ c.name }}</b>
+                <span class="mono">{{ c.code }}</span>
+                <span class="chip chip--dim">{{ c.lbc }} 板</span>
+                <span class="night-sector">{{ c.sector }}</span>
+              </div>
+              <div class="night-meta">
+                <span>隔夜分 <b>{{ c.score }}</b></span>
+                <span>收盘 {{ fmtPrice(c.close) }}</span>
+                <span>涨停价 <b class="is-up">{{ fmtPrice(c.limitUp) }}</b></span>
+                <span>{{ c.boardRule }}</span>
+              </div>
+              <div class="night-tags">
+                <span v-for="tag in nightTags(c)" :key="tag" class="tag">{{ tag }}</span>
+              </div>
+              <p v-if="c.why && c.why.length" class="night-why">{{ c.why[0] }}</p>
+              <p v-if="c.risks && c.risks.length" class="night-risk">! {{ c.risks[0] }}</p>
+            </div>
+          </article>
+        </div>
+
+        <div v-else class="night-empty">
+          <b>今天不凑三只</b>
+          <p>{{ overnightBrief.reason }}</p>
+          <p class="dim">
+            只从三关、情绪、画像、节点与无炸板同时过关的核心中选；没有合格票就空仓，弱票不补位。
+          </p>
+        </div>
+
+        <p class="night-note">
+          <template v-if="overnightFinal">
+            盘后定稿，可作为隔夜条件单草稿：竞价高开 +1%–4% 才执行，高开 &gt;6% 放弃，低开 &lt; -2% 放弃；
+            单票 ≤10%，隔夜总仓 ≤30%。催化未核验仍不能挂单。
+          </template>
+          <template v-else>
+            当前是「{{ overnightModeLabel }}」，只作预演，不能作为挂单依据；15:00 后重算才可能定稿。
+          </template>
+          今日一字 / 秒板不进三强；跳空、滑点与停牌都可能让计划失效。
+        </p>
       </div>
     </section>
 
@@ -2342,6 +2422,137 @@ function tierTone(v) {
 }
 
 .rec-note {
+  margin: 0;
+  padding: 10px 14px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--dim);
+}
+
+/* ---------- 隔夜三强 ---------- */
+
+.night-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.night-head p {
+  margin: 0;
+  font-size: 10.8px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.night-list {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.night-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.night-rank {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid rgba(243, 199, 119, 0.3);
+  background: rgba(243, 199, 119, 0.1);
+  color: #ffe2a9;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.night-body {
+  min-width: 0;
+}
+
+.night-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 7px;
+}
+
+.night-name b {
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.night-name .mono {
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+.night-sector {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.night-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.night-meta b {
+  font-family: var(--mono);
+  color: var(--text-soft);
+}
+
+.night-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.night-why {
+  margin: 5px 0 0;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+
+.night-risk {
+  margin: 3px 0 0;
+  font-size: 10.2px;
+  line-height: 1.55;
+  color: rgba(255, 154, 162, 0.8);
+}
+
+.night-empty {
+  padding: 14px;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.night-empty b {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.night-empty p {
+  margin: 0 0 4px;
+}
+
+.night-note {
   margin: 0;
   padding: 10px 14px 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.05);

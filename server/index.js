@@ -544,7 +544,9 @@ async function buildDashboard() {
       lbc: item.lbc,
       close: item.close,
       limitUp: item.limitUp,
+      limitRatio: item.limitRatio,
       boardRule: item.boardRule,
+      firstSealLabel: item.firstSealLabel || '--:--',
       score: item.score,
       prepScore: item.prepScore,
       basePrep: item.basePrep,
@@ -565,6 +567,7 @@ async function buildDashboard() {
       fromCoreScan: !!item.fromCoreScan,
       acceptable: !!item.acceptable,
       observation: !!item.observation,
+      tradableBoard: item.tradableBoard !== false,
       why: (item.why || item.reasons || []).slice(0, 4),
       risks: (item.risks || []).slice(0, 2),
       tags: (item.tags || []).slice(0, 4)
@@ -575,7 +578,9 @@ async function buildDashboard() {
       reason: overnight.reason,
       mode: overnight.mode,
       dataReady: overnight.dataReady,
-      recommendations: (overnight.recommendations || []).slice(0, 3).map(trim),
+      topN: overnight.topN || 3,
+      plan: overnight.plan || null,
+      recommendations: (overnight.recommendations || []).slice(0, overnight.topN || 3).map(trim),
       preparation: (overnight.preparation || []).slice(0, 5).map(trim),
       nodeBoard: overnight.nodeBoard || null,
       updatedAt: overnight.generatedAt

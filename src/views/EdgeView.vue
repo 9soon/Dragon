@@ -69,9 +69,9 @@ const segDesc = computed(
   () =>
     ({
       auction:
-        '竞价 9:15–9:30 与盘中 9:30–15:00 都实时计算：盘中按封板确认、近板强度、量比、板块共振与弱转强排序，只列最强 5 只；没有三关与催化，再强也只观察。',
+        '竞价 9:15–9:30 与盘中 9:30–15:00 都实时计算：盘前高置信推荐最多 3 只，要求三关、基因、竞价额与预警分同时达标；其余强势票只进观察池。没有三关与催化，再强也不执行。',
       overnight:
-        '收盘后把三关、情绪、弱转强与老龙画像合成条件单。只在三关通过且情绪修复 / 主升时制定，冰点与退潮不挂。',
+        '收盘后把三关、情绪、弱转强与老龙画像合成条件单：只留最强 3 只，按隔夜分排序；今日一字 / 秒板不进三强。只在三关通过且情绪修复 / 主升时制定，冰点与退潮不挂。',
       profile:
         '回溯板块内 3 板以上领涨股，统计次日延续率与隔夜跳空。样本统计不是准确率，只用于剔除明显不符合龙头特征的标的。'
     })[segment.value]
@@ -173,6 +173,9 @@ const visibleAuction = computed(() =>
   showAllAuction.value ? auctionCards.value : auctionCards.value.slice(0, 6)
 )
 const auctionActionable = computed(() => auctionCards.value.filter((x) => x.actionable).length)
+const auctionHighRecs = computed(
+  () => currentRecommendations.value.filter((r) => r.alertMode === 'auction' && r.confidence === 'high').length
+)
 const auctionWatch = computed(
   () => auctionCards.value.filter((x) => !x.actionable && x.status !== 'drop').length
 )
@@ -197,9 +200,13 @@ const auctionConfirmLabel = computed(() => {
 })
 const auctionListLabel = computed(() => {
   const n = auctionCards.value.length
-  const base = n ? `最强 ${n} 只` : '暂无合格核心'
-  if (!auctionActive.value) return `${base} · 下一场准备`
-  return auctionIsIntraday.value ? `${base} · 1.5 秒实时` : `${base} · 1.5 秒轮询`
+  if (!auctionActive.value) {
+    return n ? `最强 ${n} 只 · 下一场准备` : '暂无合格核心 · 下一场准备'
+  }
+  if (auctionIsIntraday.value) {
+    return n ? `最强 ${n} 只 · 1.5 秒实时` : '暂无合格核心'
+  }
+  return n ? `观察 ${n} 只 · 推荐只在高置信榜` : '暂无合格核心 · 推荐只在高置信榜'
 })
 const auctionRingLabel = computed(() => {
   if (!auctionActive.value) return '准备分'
@@ -707,8 +714,12 @@ onBeforeUnmount(() => {
 
         <div class="mini-stats">
           <div class="mini-stat">
-            <b class="is-up">{{ auctionActive ? auctionActionable : auctionCards.length }}</b>
-            <small>{{ auctionActive ? (auctionIsIntraday ? '封板确认' : '可执行候选') : '竞价前准备' }}</small>
+            <b class="is-up">
+              {{ auctionActive ? (auctionIsIntraday ? auctionActionable : auctionHighRecs) : auctionCards.length }}
+            </b>
+            <small>
+              {{ auctionActive ? (auctionIsIntraday ? '封板确认' : '高置信推荐') : '竞价前准备' }}
+            </small>
           </div>
           <div class="mini-stat">
             <b>{{ auctionActive ? auctionWatch : overnightExecutable }}</b>
@@ -740,10 +751,15 @@ onBeforeUnmount(() => {
         <AlertRecommendations v-if="auction.active || recommendationTotal" :live="recommendationLive" />
 
         <header class="section-head">
-          <span class="section-title">{{ auction.active ? (auction.intraday ? '盘中强势候选' : '竞价强势候选') : '下一场竞价的准备池' }}</span>
+          <span class="section-title">{{ auction.active ? (auction.intraday ? '盘中强势候选' : '竞价观察池') : '下一场竞价的准备池' }}</span>
           <span class="section-count">{{ auctionListLabel }}</span>
           <button class="section-link" @click="loadAuction()">刷新</button>
         </header>
+
+        <p v-if="auction.active && !auction.intraday" class="section-note">
+          这一栏只解释“为什么关注”，不是推荐。真正推荐只看上方高置信榜：三关通过、基因 ≥70、
+          涨幅 2%–7%、竞价额 ≥ 昨日成交 3%、预警分 ≥78，且无核按钮风险；条件不齐就空仓。
+        </p>
 
         <article
           v-for="(c, idx) in visibleAuction"
@@ -780,7 +796,11 @@ onBeforeUnmount(() => {
           <div class="chip-row">
             <span class="chip" :class="statusChipClass(c)">{{ c.displayLabel }}</span>
             <span class="chip" :class="catChipClass(c.cat)">{{ c.cat.label }}</span>
-            <span v-if="c.rec" class="chip chip--gold">预警推荐 {{ c.rec.recommendTime }}</span>
+            <span
+              v-if="c.rec"
+              class="chip"
+              :class="c.rec.confidence === 'high' ? 'chip--red' : 'chip--gold'"
+            >{{ c.rec.confidence === 'high' ? '高置信' : '预警推荐' }} {{ c.rec.recommendTime }}</span>
             <span
               v-if="c.nuclearLevel && c.nuclearLevel !== 'low'"
               class="chip"
@@ -939,8 +959,8 @@ onBeforeUnmount(() => {
             <div class="rule-line"><span>04</span><p>已封板只标「买不进 / 排队观察」，不进入可执行候选；竞价预警只提醒未涨停票。</p></div>
             <div class="rule-line"><span>05</span><p>高开 > 8% 不追，低开翻绿剔除；9:30 承接失败按失效处理。</p></div>
             <div class="rule-line"><span>06</span><p>板块三关未过或催化未核验，竞价再强也只是观察，不执行。</p></div>
-            <div class="rule-line"><span>07</span><p>只做非双创标的；科创板 688/689、创业板 300/301 的 20cm 不进入榜单和预警。推荐榜最多 3 只、按预警分从强到弱，每轮最多弹 1 只。</p></div>
-            <div class="rule-line"><span>08</span><p>推荐时间与当日已移出记录保存在浏览器本地，刷新页面不会清空；清空记录需在预警中心二次确认。</p></div>
+            <div class="rule-line"><span>07</span><p>盘前高置信只认：9:20 后确认、板块三关通过、基因 ≥70、涨幅 2%–7%、竞价额 ≥ 昨日成交 3%、预警分 ≥78，且无核按钮风险；最多 3 只，高置信优先。</p></div>
+            <div class="rule-line"><span>08</span><p>上方「竞价观察池」只解释为什么关注，不是推荐；高置信为空就空仓。推荐时间与已移出记录保存在浏览器本地，刷新不清空。</p></div>
           </template>
         </section>
 
@@ -1017,7 +1037,7 @@ onBeforeUnmount(() => {
         <div v-if="overnightRecs.length">
           <header class="section-head">
             <span class="section-title">隔夜计划候选</span>
-            <span class="section-count">{{ overnightRecs.length }} 只 · 按隔夜分</span>
+            <span class="section-count">{{ overnightRecs.length }} / 3 只 · 按隔夜分</span>
           </header>
 
           <article
@@ -1122,7 +1142,7 @@ onBeforeUnmount(() => {
         <div v-else-if="overnight.status !== 'empty'" class="empty-view">
           <div class="glyph">候</div>
           <b>没有通过严格画像的核心</b>
-          <p>数据允许制定计划，但个股还没同时满足三关、情绪、画像、连板高度与无炸板门槛。宁缺毋滥；下方准备池只解释“为什么被关注”，不构成挂单依据。</p>
+          <p>数据允许制定计划，但个股还没同时满足三关、情绪、画像、连板高度与无炸板门槛。宁缺毋滥，最多 3 只，不够就空着；下方准备池只解释“为什么被关注”，不构成挂单依据。</p>
         </div>
 
         <div v-else class="empty-view">

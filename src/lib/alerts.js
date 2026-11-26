@@ -309,6 +309,7 @@ export function ingestRecommendations(board, meta = {}) {
       volRatio: x.volRatio != null ? x.volRatio : rec.volRatio,
       score: x.score != null ? x.score : rec.score,
       alertScore: x.alertScore != null ? x.alertScore : rec.alertScore,
+      confidence: x.confidence || rec.confidence || 'standard',
       geneScore: x.geneScore != null ? x.geneScore : rec.geneScore,
       nodeLabel: x.nodeLabel || rec.nodeLabel,
       statusLabel: x.statusLabel || rec.statusLabel || '盘中推荐 · 未封板',

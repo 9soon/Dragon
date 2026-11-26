@@ -16,6 +16,18 @@ defineProps({
 const dateLabel = computed(() => alertState.recommendationDateLabel || '今日')
 const activeCount = computed(() => currentRecommendations.value.length)
 const pastCount = computed(() => pastRecommendations.value.length)
+const recMode = computed(() => {
+  const list = currentRecommendations.value.length
+    ? currentRecommendations.value
+    : pastRecommendations.value
+  const hit = list.find((r) => r.alertMode)
+  return hit ? hit.alertMode : ''
+})
+const scopeTitle = computed(() => (recMode.value === 'auction' ? '竞价推荐' : '预警推荐'))
+const scopeSub = computed(() => {
+  const base = `按预警分从强到弱 · 当前 ${activeCount.value} 只在榜`
+  return recMode.value === 'auction' ? `高置信优先 · ${base}` : base
+})
 const historyOpen = ref(false)
 const HISTORY_PREVIEW = 4
 const visiblePast = computed(() =>
@@ -32,9 +44,9 @@ function isHotScore(score) {
 <template>
   <section class="rec-block" :class="{ 'is-compact': compact }" aria-label="预警推荐">
     <header class="rec-head">
-      <span class="rec-title">{{ dateLabel }} 预警推荐</span>
+      <span class="rec-title">{{ dateLabel }} {{ scopeTitle }}</span>
       <span class="rec-sub">
-        {{ live ? `按预警分从强到弱 · 当前 ${activeCount} 只在榜` : `按预警分从强到弱 · 当日 ${activeCount + pastCount} 条记录（休市不更新）` }}
+        {{ live ? scopeSub : `按预警分从强到弱 · 当日 ${activeCount + pastCount} 条记录（休市不更新）` }}
       </span>
       <span v-if="recommendationUpdatedAt" class="rec-stamp mono">
         更新 {{ recommendationUpdatedAt }}
@@ -54,6 +66,7 @@ function isHotScore(score) {
             <b>{{ r.name }}</b>
             <span class="mono">{{ r.code }}</span>
             <span class="chip chip--gold">{{ r.statusLabel }}</span>
+            <span v-if="r.confidence === 'high'" class="chip chip--red">高置信</span>
             <span v-if="r.nuclearLevel === 'mid'" class="chip chip--warn">
               防核按钮 {{ r.nuclearScore }}
             </span>
