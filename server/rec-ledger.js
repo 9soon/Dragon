@@ -329,6 +329,18 @@ function recordRecommendations(dashboard) {
       existed.gate = gate
       dirty = true
     }
+    /* 只补“为什么”的归因，不改定稿结论与推荐清单 */
+    if (action && Array.isArray(action.blockers) && action.blockers.length) {
+      const nextBlockers = action.blockers.slice(0, 5)
+      const prevBlockers =
+        existed.action && Array.isArray(existed.action.blockers)
+          ? existed.action.blockers
+          : []
+      if (JSON.stringify(prevBlockers) !== JSON.stringify(nextBlockers)) {
+        existed.action = { ...(existed.action || {}), blockers: nextBlockers }
+        dirty = true
+      }
+    }
     if (dirty) {
       store.updatedAt = new Date().toISOString()
       saveStore(store)
@@ -375,7 +387,8 @@ function recordRecommendations(dashboard) {
       canAct: action.canAct || null,
       label: action.label || '',
       position: action.position || '',
-      tone: action.tone || ''
+      tone: action.tone || '',
+      blockers: Array.isArray(action.blockers) ? action.blockers.slice(0, 5) : []
     },
     items,
     overnight: overnight || (existed && existed.overnight) || null,

@@ -32,6 +32,52 @@ const down = computed(() => review.value.downTop || [])
 const plan = computed(() => review.value.plan || null)
 const planAction = computed(() => (plan.value && plan.value.action) || null)
 const planBlocked = computed(() => !!planAction.value && planAction.value.canAct === 'no')
+const nearGateSectors = computed(() => {
+  const gate = props.dashboard.gate || {}
+  if (gate.key !== 'empty') return []
+  const sectors = props.dashboard.sectors || {}
+  const seen = new Set()
+  const pool = []
+  for (const list of [sectors.mainCandidates, sectors.newThemes]) {
+    for (const s of list || []) {
+      if (!s || s.gatesPassed !== 2 || seen.has(s.name)) continue
+      seen.add(s.name)
+      pool.push(s)
+    }
+  }
+  return pool
+    .sort(
+      (a, b) =>
+        (b.todayCount || 0) - (a.todayCount || 0) ||
+        ((b.ladder && b.ladder.score) || 0) - ((a.ladder && a.ladder.score) || 0)
+    )
+    .slice(0, 4)
+})
+
+function sectorMoneyPass(s) {
+  const check = ((s && s.checks) || []).find((c) => c.key === 'money')
+  const evidence = (check && check.evidence) || []
+  return {
+    pass: evidence.filter((e) => e.state === 'pass').length,
+    total: evidence.length
+  }
+}
+
+function sectorFailReason(s) {
+  const checks = (s && s.checks) || []
+  const labels = new Set(checks.map((c) => c.label))
+  const parts = checks
+    .filter((c) => !c.pass)
+    .map((c) => `${c.label}：${c.detail || '未通过'}`)
+  const extra = ((s && s.missing) || []).filter((m) => !labels.has(m))
+  if (extra.length) parts.push(`数据缺口：${extra.join('、')}`)
+  const pending = checks
+    .flatMap((c) => c.evidence || [])
+    .filter((e) => e.state === 'unknown')
+    .map((e) => e.label)
+  if (pending.length) parts.push(`数据待确认：${pending.join('、')}`)
+  return parts.join('；')
+}
 const promoRank = computed(() => (plan.value && plan.value.promotionRank) || [])
 const heightWatch = computed(() => (plan.value && plan.value.heightWatch) || [])
 const oneWordWatch = computed(() => (plan.value && plan.value.oneWordWatch) || [])
@@ -270,6 +316,7 @@ const snapshotLabel = computed(() => {
 })
 
 const promotionOverall = computed(() => promotion.value.overall || {})
+const promotionCore = computed(() => sentiment.value.promotionCore || null)
 const premium = computed(() => sentiment.value.premium || {})
 
 function elimChip(item) {
@@ -288,7 +335,13 @@ const conclusion = computed(() => {
       premium.value.skip ? '待更新' : fmtPct(premium.value.avg)
     }。`
   )
-  if (promotionOverall.value.rate != null) {
+  if (promotionCore.value && promotionCore.value.rate != null) {
+    parts.push(
+      `主板晋级率 ${promotionCore.value.rate}%（${promotionCore.value.promoted}/${promotionCore.value.total}），全市场 ${
+        promotionOverall.value.rate == null ? '--' : `${promotionOverall.value.rate}%`
+      }（${promotionOverall.value.promoted || 0}/${promotionOverall.value.total || 0}）。`
+    )
+  } else if (promotionOverall.value.rate != null) {
     parts.push(`整体晋级率 ${promotionOverall.value.rate}%（${promotionOverall.value.promoted}/${promotionOverall.value.total}）。`)
   }
   if (gate.key === 'empty') {
@@ -397,6 +450,12 @@ function tierTone(v) {
               {{ recToday.overnight.standby || 0 }} · 准备
               {{ recToday.overnight.prep }} · 观察 {{ recToday.overnight.watch }}。
             </template>
+            <p
+              v-if="recToday.action && recToday.action.blockers && recToday.action.blockers.length"
+              class="rec-blockers"
+            >
+              为什么：{{ recToday.action.blockers.join('；') }}
+            </p>
           </div>
 
           <div v-if="recWatch.evaluated" class="rec-watch-line">
@@ -816,6 +875,9 @@ function tierTone(v) {
           <span class="plan-position">{{ planAction.position }}</span>
         </div>
         <p class="plan-summary">{{ planAction.summary }}</p>
+        <ul v-if="planAction.blockers && planAction.blockers.length" class="plan-blockers">
+          <li v-for="b in planAction.blockers" :key="b">{{ b }}</li>
+        </ul>
         <ul class="plan-review">
           <li v-for="line in planReview" :key="line">{{ line }}</li>
         </ul>
@@ -832,6 +894,29 @@ function tierTone(v) {
             <p>{{ sc.text }}</p>
           </div>
         </div>
+      </div>
+
+      <div v-if="nearGateSectors.length" class="near-gate">
+        <div class="near-gate-head">
+          <span>准三关 · 只观察</span>
+          <span class="dim">2/3 关 · 不推荐 · 不计胜率</span>
+        </div>
+        <article v-for="s in nearGateSectors" :key="s.name" class="near-gate-row">
+          <div class="near-gate-top">
+            <b>{{ s.name }}</b>
+            <span class="dim">{{ s.todayCount }} 家涨停 · 今日 #{{ s.rankToday }}</span>
+            <span class="chip chip--warn">{{ s.gatesPassed }}/3 关</span>
+          </div>
+          <div class="near-gate-meta">
+            <span>高 {{ s.ladder.high }} · 二 {{ s.ladder.mid }} · 首 {{ s.ladder.first }}</span>
+            <span v-if="s.leader">龙头 {{ s.leader.name }} {{ s.leader.lbc }} 板</span>
+            <span>资金 {{ sectorMoneyPass(s).pass }}/{{ sectorMoneyPass(s).total }}</span>
+          </div>
+          <p class="near-gate-gap">差：{{ sectorFailReason(s) }}</p>
+        </article>
+        <p class="near-gate-note">
+          严格三关不降。这里只把“差一关”的强势板块摊开，方便盯明日补缺；不计入推荐、不计胜率、不解除空仓。
+        </p>
       </div>
 
       <div v-if="plan.leader" class="leader-card">
@@ -1611,6 +1696,113 @@ function tierTone(v) {
   font-size: 13.5px;
   line-height: 1.75;
   color: var(--text-soft);
+}
+
+.plan-blockers {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 180, 94, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 180, 94, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.plan-blockers li {
+  position: relative;
+  padding-left: 11px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--warn);
+}
+
+.plan-blockers li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.62em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+/* ---------------- 准三关 · 只观察 ---------------- */
+
+.near-gate {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 13px;
+  border-radius: var(--radius);
+  border: 1px dashed rgba(243, 199, 119, 0.24);
+  background: rgba(243, 199, 119, 0.04);
+}
+
+.near-gate-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--gold);
+}
+
+.near-gate-head .dim {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.near-gate-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.near-gate-top {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.near-gate-top b {
+  font-size: 14px;
+}
+
+.near-gate-top .chip {
+  margin-left: auto;
+}
+
+.near-gate-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.near-gate-gap {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--warn);
+}
+
+.near-gate-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--muted);
 }
 
 .plan-review {
@@ -2730,6 +2922,13 @@ function tierTone(v) {
 .rec-watch-line {
   border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.025);
+}
+
+.rec-blockers {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--warn);
 }
 
 .rec-days {

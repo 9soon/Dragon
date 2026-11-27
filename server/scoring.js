@@ -62,11 +62,23 @@ function matchBoard(hybk, boards) {
     arr
       .slice()
       .sort((a, b) => {
+        const an = stripLevel(a.name)
+        const bn = stripLevel(b.name)
+        /* 行业名常被截断（计算机设 → 计算机设备），优先选“更长、以它开头”的板块，
+         * 避免目录刷新后跳到更宽的“计算机”把资金映射换掉 */
+        const aExt = an.startsWith(n) ? 0 : 1
+        const bExt = bn.startsWith(n) ? 0 : 1
         const aLevel2 = a.name.includes('Ⅱ') ? 0 : 1
         const bLevel2 = b.name.includes('Ⅱ') ? 0 : 1
-        const aDiff = Math.abs(stripLevel(a.name).length - n.length)
-        const bDiff = Math.abs(stripLevel(b.name).length - n.length)
-        return aDiff - bDiff || aLevel2 - bLevel2 || b.upCount + b.downCount - (a.upCount + a.downCount)
+        const aDiff = Math.abs(an.length - n.length)
+        const bDiff = Math.abs(bn.length - n.length)
+        return (
+          aExt - bExt ||
+          aDiff - bDiff ||
+          bn.length - an.length ||
+          aLevel2 - bLevel2 ||
+          (b.upCount || 0) + (b.downCount || 0) - ((a.upCount || 0) + (a.downCount || 0))
+        )
       })[0]
   const exact = boards.filter((b) => stripLevel(b.name) === n)
   if (exact.length) return rank(exact)
@@ -628,6 +640,12 @@ function buildPromotion(prevPool, todayPool) {
     return t && t.lbc >= 2
   })
   const contPromoted = prevCont.filter((s) => todayMap.has(s.code))
+  /* 主板口径：与选股 / 推荐一致，剔除双创 20cm 与 ST。
+   * 防守信号不能拿系统根本不交易的票来判，否则会被 20cm 的低晋级率拖进空仓。 */
+  const corePrev = prevPool.filter(
+    (s) => !is20cmCode(s.code) && !/ST/i.test(s.name || '')
+  )
+  const corePromoted = corePrev.filter((s) => todayMap.has(s.code))
   return {
     first: {
       total: prevFirst.length,
@@ -651,6 +669,11 @@ function buildPromotion(prevPool, todayPool) {
               0
             )
           : null
+    },
+    core: {
+      total: corePrev.length,
+      promoted: corePromoted.length,
+      rate: corePrev.length ? round((corePromoted.length / corePrev.length) * 100, 0) : null
     }
   }
 }
@@ -687,7 +710,13 @@ function buildSentiment({
   const heightScore = clamp((maxBoard / 6) * 100)
   const premiumScore = premiumAvg == null ? 50 : clamp(((premiumAvg + 3) / 9) * 100)
   const blowScore = clamp(100 - blowRate * 1.35)
-  const promoteScore = propagation.overall.rate == null ? 50 : clamp(propagation.overall.rate * 3.2)
+  /* 晋级率统一用主板口径（00/60，剔除 ST / 双创 20cm），与选股范围一致；
+   * 样本太小时退回全市场，并明确标注口径。 */
+  const corePromotion = propagation.core
+  const coreReady = !!(corePromotion && corePromotion.total >= 10)
+  const promoteRate = coreReady ? corePromotion.rate : propagation.overall.rate
+  const promoteBasis = coreReady ? 'core' : 'overall'
+  const promoteScore = promoteRate == null ? 50 : clamp(promoteRate * 3.2)
   const score = Math.round(
     0.2 * limitUpScore +
       0.2 * heightScore +
@@ -709,7 +738,6 @@ function buildSentiment({
   }
 
   /* 进攻 / 防守信号：给“能不能打板”一个独立于主线的环境判断 */
-  const promoteRate = propagation.overall.rate
   const attack =
     promoteRate != null &&
     promoteRate >= 35 &&
@@ -723,15 +751,30 @@ function buildSentiment({
     blowRate >= 45 ||
     (promoteRate != null && promoteRate < 25) ||
     (premiumAvg != null && premiumAvg < 0 && blowRate >= 30)
+  const promoText = coreReady
+    ? `主板晋级率 ${promoteRate}%（${corePromotion.promoted}/${corePromotion.total}），全市场 ${propagation.overall.rate}%`
+    : `晋级率 ${promoteRate == null ? '--' : promoteRate + '%'}`
+  const attackGaps = []
+  if (promoteRate == null || promoteRate < 35) attackGaps.push('主板晋级率 <35%')
+  if (blowRate >= 35) attackGaps.push('炸板率 ≥35%')
+  if (premiumAvg == null || premiumAvg < 0) attackGaps.push('溢价 <0')
+  if (maxBoard < 3) attackGaps.push('最高板 <3')
+  if (!tierCounts.first) attackGaps.push('无首板')
+  if (!tierCounts.mid) attackGaps.push('无二板')
   const signal = {
     attack,
     defense,
     label: attack ? '进攻窗口' : defense ? '防守窗口' : '观察窗口',
+    rate: promoteRate,
+    overallRate: propagation.overall.rate,
+    basis: promoteBasis,
     note: attack
-      ? `晋级率 ${promoteRate}%，溢价 ${premiumAvg}%，炸板率 ${blowRate}%，可只在最强核心上试错。`
+      ? `${promoText}，溢价 ${premiumAvg}%，炸板率 ${blowRate}%，可只在最强核心上试错。`
       : defense
-        ? `炸板率 ${blowRate}%，晋级率 ${promoteRate == null ? '--' : promoteRate + '%'}，溢价 ${premiumAvg == null ? '--' : premiumAvg + '%'}，优先降频与控制回撤。`
-        : `晋级率 ${promoteRate == null ? '--' : promoteRate + '%'}，炸板率 ${blowRate}%，等晋级率回到 35% 以上再提高进攻强度。`
+        ? `炸板率 ${blowRate}%，${promoText}，溢价 ${premiumAvg == null ? '--' : premiumAvg + '%'}，优先降频与控制回撤。`
+        : `${promoText}，炸板率 ${blowRate}%，${
+            attackGaps.length ? `进攻条件还差：${attackGaps.join('、')}。` : '等最强核心确认。'
+          }`
   }
 
   return {
@@ -754,13 +797,15 @@ function buildSentiment({
       skip: skipPremium
     },
     promotion: propagation,
+    promotionCore: coreReady ? corePromotion : null,
+    promotionBasis: promoteBasis,
     prevPerformance,
     breakdown: [
       { key: 'premium', label: '昨日涨停溢价', value: Math.round(premiumScore), weight: 25 },
       { key: 'limitUp', label: '涨停家数', value: Math.round(limitUpScore), weight: 20 },
       { key: 'height', label: '连板高度', value: Math.round(heightScore), weight: 20 },
       { key: 'blow', label: '封板质量', value: Math.round(blowScore), weight: 20 },
-      { key: 'promote', label: '晋级率', value: Math.round(promoteScore), weight: 15 }
+      { key: 'promote', label: coreReady ? '主板晋级率' : '晋级率', value: Math.round(promoteScore), weight: 15 }
     ]
   }
 }

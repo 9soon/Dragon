@@ -2044,7 +2044,11 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
   }))
 
   const promotionRate =
-    s.promotion && s.promotion.overall ? num(s.promotion.overall.rate, null) : null
+    s.promotionCore && s.promotionCore.rate != null
+      ? num(s.promotionCore.rate, null)
+      : s.promotion && s.promotion.overall
+        ? num(s.promotion.overall.rate, null)
+        : null
   const premiumAvg =
     s.premium && s.premium.avg != null && !s.premium.skip ? num(s.premium.avg, 0) : null
   const blowRate = num(s.blowRate, 0)
@@ -2125,12 +2129,33 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
       summary: `环境属于观察窗口：只跟最强核心，等晋级率回到 35% 以上或核心分歧回封，再考虑出手。`
     }
   }
+  action.blockers = []
+  if (!gate || gate.key === 'empty') {
+    action.blockers.push(gate && gate.detail ? gate.detail : '板块三关没有全过')
+  }
+  if (defense) {
+    const defenseReasons = []
+    if (blowRate >= 45) defenseReasons.push(`炸板率 ${blowRate}%（≥45%）`)
+    if (promotionRate != null && promotionRate < 25) {
+      defenseReasons.push(`主板晋级率 ${promotionRate}%（<25%）`)
+    }
+    if (premiumAvg != null && premiumAvg < 0 && blowRate >= 30) {
+      defenseReasons.push(`溢价 ${premiumAvg}%（<0）且炸板率 ${blowRate}%（≥30%）`)
+    }
+    action.blockers.push(`防守窗口：${defenseReasons.join('；')}`)
+  }
+  if (gate && gate.key !== 'empty' && !qualified.length) {
+    action.blockers.push('前排全部不合格：高位脏板 / 后排 / 三板组核按钮都不接，等新核心。')
+  }
+  if (gate && gate.key !== 'empty' && qualified.length && divergence && !defense) {
+    action.blockers.push('分歧窗口：只做最强核心回封，不接后排、不追一致高开。')
+  }
   action.scenarios = [
     {
       key: 'weak',
       title: '弱势切核心抱团',
       active: defense,
-      text: `晋级率跌破 30% 或炸板率升破 40% 时：删除所有后排与补涨，只抱最高板 / 唯一核心；核心不封板就空仓，不低吸跟风。`
+      text: `主板晋级率跌破 25% 或炸板率升破 45% 时：删除所有后排与补涨，只抱最高板 / 唯一核心；核心不封板就空仓，不低吸跟风。`
     },
     {
       key: 'diverge',
@@ -2142,7 +2167,7 @@ function buildReviewPlan({ sentiment, gate, pool, sectors, quotesByCode }) {
   action.triggers = [
     `竞价：${leadNames || '核心候选'} 高开 1%–4%，竞价额 ≥ 今日成交 3%，同板块至少 1 只核心同步红盘；否则放弃。`,
     '开盘：只等核心分歧回封 / 分时均线转强；高开秒板不追，后排补涨不做。',
-    '风控：晋级率 < 30% 或炸板率 > 40%，或最高板断板，当天直接空仓。',
+    '风控：主板晋级率 <25% 或炸板率 ≥45%（溢价 <0 且炸板率 ≥30%），或最高板断板，当天直接空仓。',
     '新周期：若出现新题材 ≥ 3 家首板且龙头一字，老核心降为观察，等第二日确认。'
   ]
   action.doNot = [

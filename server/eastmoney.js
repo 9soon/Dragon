@@ -186,10 +186,26 @@ async function refreshBoardsInBackground() {
   }
 }
 
+function mergeBoards(live, catalog) {
+  const map = new Map()
+  for (const b of catalog) map.set(b.code, b)
+  for (const b of live) {
+    const prev = map.get(b.code)
+    map.set(b.code, prev ? { ...prev, ...b } : b)
+  }
+  return Array.from(map.values())
+}
+
 async function getBoards() {
-  if (liveBoards && Date.now() - liveBoardsAt < 1000 * 60 * 30) return liveBoards
+  const catalog = loadBoardCatalog()
+  if (liveBoards) {
+    /* 线上目录可能只抓到部分行业，内置目录兜底补全，
+     * 否则板块映射会时有时无（资金证据跟着变 unknown） */
+    if (Date.now() - liveBoardsAt >= 1000 * 60 * 30) refreshBoardsInBackground()
+    return mergeBoards(liveBoards, catalog)
+  }
   refreshBoardsInBackground()
-  return loadBoardCatalog()
+  return catalog
 }
 
 async function getBoardQuotes(boardSecids) {

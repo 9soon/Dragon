@@ -10,6 +10,7 @@ const props = defineProps({
 const s = computed(() => props.sentiment)
 const phaseTone = computed(() => (s.value.phase && s.value.phase.tone) || 'neutral')
 const promotion = computed(() => s.value.promotion && s.value.promotion.overall)
+const promotionCore = computed(() => s.value.promotionCore || null)
 const premiumText = computed(() => {
   if (s.value.premium && s.value.premium.skip) return '待更新'
   return fmtPct(s.value.premium ? s.value.premium.avg : null)
@@ -72,8 +73,13 @@ const premiumClass = computed(() => {
 
     <div class="mood-foot">
       <span v-if="s.signal && s.signal.note" class="dim">{{ s.signal.note }}</span>
+      <span v-if="promotionCore && promotionCore.rate != null">
+        主板晋级率 <b class="mono">{{ promotionCore.rate }}%</b>
+        <span class="dim">（{{ promotionCore.promoted }}/{{ promotionCore.total }}）</span>
+      </span>
       <span v-if="promotion && promotion.rate != null">
-        整体晋级率 <b class="mono">{{ promotion.rate }}%</b>
+        <span class="dim">{{ promotionCore ? '全市场' : '整体' }}晋级率</span>
+        <b class="mono">{{ promotion.rate }}%</b>
         <span class="dim">（{{ promotion.promoted }}/{{ promotion.total }}）</span>
       </span>
       <span v-else class="dim">晋级率待昨日池更新</span>
